@@ -50,22 +50,6 @@ cc_binary {
     installable: false, // installed in APEX
 }
 
-apex {
-    name: "com.google.cf.health.storage",
-    manifest: "apex_manifest.json",
-    file_contexts: "apex_file_contexts",
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-    updatable: false,
-    vendor: true,
-
-    binaries: ["android.hardware.health.storage-service.cuttlefish"],
-    prebuilts: [
-        "android.hardware.health.storage-service.cuttlefish.rc",
-        "android.hardware.health.storage-service.cuttlefish.xml",
-    ],
-}
-
 prebuilt_etc {
     name: "android.hardware.health.storage-service.cuttlefish.rc",
     src: "android.hardware.health.storage-service.cuttlefish.rc",

@@ -76,23 +76,6 @@ prebuilt_etc {
     installable: false,
 }
 
-apex {
-    name: "com.google.cf.health",
-    manifest: "apex_manifest.json",
-    file_contexts: "apex_file_contexts",
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-    updatable: false,
-    vendor: true,
-
-    binaries: ["android.hardware.health-service.cuttlefish"],
-    overrides: ["charger"],
-    prebuilts: [
-        "android.hardware.health-service.cuttlefish.rc",
-        "android.hardware.health-service.cuttlefish.xml",
-    ],
-}
-
 // Deprecated. Retained to be used on other devices. It is not installed on cuttlefish.
 // TODO(b/210183170): Delete once other devices transition to the AIDL HAL.
 cc_library_shared {

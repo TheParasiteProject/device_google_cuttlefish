@@ -47,22 +47,6 @@ cc_binary {
     installable: false, // install in APEX
 }
 
-apex {
-    name: "com.google.cf.oemlock",
-    manifest: "apex_manifest.json",
-    file_contexts: "apex_file_contexts",
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-    updatable: false,
-    vendor: true,
-
-    binaries: ["android.hardware.oemlock-service.remote"],
-    prebuilts: [
-        "android.hardware.oemlock-service.remote.rc",
-        "android.hardware.oemlock-service.remote.xml",
-    ],
-}
-
 prebuilt_etc {
     name: "android.hardware.oemlock-service.remote.rc",
     src: "android.hardware.oemlock-service.remote.rc",

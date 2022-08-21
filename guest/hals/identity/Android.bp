@@ -84,20 +84,3 @@ prebuilt_etc {
     src: "android.hardware.identity-service.remote.rc",
     installable: false,
 }
-
-apex {
-    name: "com.google.cf.identity",
-    vendor: true,
-    manifest: "apex_manifest.json",
-    file_contexts: "apex_file_contexts",
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-    updatable: false,
-
-    binaries: ["android.hardware.identity-service.remote"],
-    prebuilts: [
-        "android.hardware.identity-service.remote.rc",
-        "android.hardware.identity-service.remote.xml",
-        "android.hardware.identity_credential.remote.xml",
-    ]
-}

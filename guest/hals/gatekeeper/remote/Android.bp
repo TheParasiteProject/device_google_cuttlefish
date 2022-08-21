@@ -67,21 +67,3 @@ prebuilt_etc {
     src: "android.hardware.gatekeeper-service.remote.rc",
     installable: false,
 }
-
-apex {
-    name: "com.google.cf.gatekeeper",
-    manifest: "apex_manifest.json",
-    file_contexts: "apex_file_contexts",
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-    vendor: true,
-    updatable: false,
-
-    binaries: [
-        "android.hardware.gatekeeper-service.remote",
-    ],
-    prebuilts: [
-        "android.hardware.gatekeeper-service.remote.xml",
-        "android.hardware.gatekeeper-service.remote.rc",
-    ],
-}

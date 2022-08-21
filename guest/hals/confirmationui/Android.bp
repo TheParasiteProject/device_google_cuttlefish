@@ -109,19 +109,3 @@ prebuilt_etc {
     sub_dir: "vintf",
     installable: false,
 }
-
-apex {
-    name: "com.google.cf.confirmationui",
-    vendor: true,
-    manifest: "apex_manifest.json",
-    file_contexts: "apex_file_contexts",
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-    updatable: false,
-
-    binaries: ["android.hardware.confirmationui-service.cuttlefish"],
-    prebuilts: [
-        "android.hardware.confirmationui-service.cuttlefish.rc",
-        "android.hardware.confirmationui-service.cuttlefish.xml",
-    ],
-}

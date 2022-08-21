@@ -16,15 +16,3 @@
 package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
-
-apex {
-    name: "com.google.cf.ir",
-    defaults: ["com.android.hardware.ir"],
-    key: "com.google.cf.apex.key",
-    certificate: ":com.google.cf.apex.certificate",
-
-    // Add the legacy default implementation
-    native_shared_libs: [
-        "consumerir.default",
-    ],
-}
