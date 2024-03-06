@@ -102,7 +102,7 @@ trap workdir_remove EXIT
 cat >"${workdir}"/grub.cfg <<EOF
 set timeout=0
 menuentry "Linux" {
-  linux /vmlinuz ${grub_cmdline} root=${grub_rootfs} init=/bin/sh
+  linux /vmlinuz ${grub_cmdline} root=${grub_rootfs}
   initrd /initrd.img
 }
 EOF
@@ -125,31 +125,40 @@ partx -v --update \${1}
 dd if="\${SCRIPT_DIR}"/esp.img of=\${1}\${partition}1 bs=16M
 mkfs.ext4 -L ROOT -U \$(cat \${SCRIPT_DIR}/rootfs_uuid) \${1}\${partition}2
 mount \${1}\${partition}2 /media
-tar -C /media -Spxf \${SCRIPT_DIR}/rootfs.tar.lz4
+tar -C /media -Spxf \${SCRIPT_DIR}/rootfs.tar.xz
 umount /media
 EOF
 chmod a+x "${workdir}"/install.sh
 
+cat >"${workdir}"/override-getty.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -a root --noclear tty1 \$TERM
+EOF
+
+cat >"${workdir}"/override-serial-getty.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -a root --keep-baud 115200,57600,38400,9600 ttyAMA0 \$TERM
+EOF
+
 # Back up the GPT so we can restore it when installing
 /sbin/sgdisk --backup="${workdir}"/gpt.img "${input}" >/dev/null
 
-loopfile="$(/sbin/losetup -f)"
-sudo losetup -P "${loopfile}" "${input}"
-loopdev_remove() {
-  sudo losetup -d "${loopfile}"
-  workdir_remove
-}
-trap loopdev_remove EXIT
+efi_partition_num=1
+efi_partition_start=$(partx -g -o START -s -n ${efi_partition_num} "${input}" | xargs)
+efi_partition_end=$(partx -g -o END -s -n ${efi_partition_num} "${input}" | xargs)
+efi_partition_offset=$((${efi_partition_start} * 512))
+efi_partition_num_sectors=$((${efi_partition_end} - ${efi_partition_start} + 1))
 
 # Back up the ESP so we can restore it when installing
 touch "${workdir}"/esp.img
-sudo dd if="${loopfile}p1" of="${workdir}"/esp.img status=none >/dev/null
+dd if="${input}" of="${workdir}"/esp.img bs=512 skip=${efi_partition_start} count=${efi_partition_num_sectors} status=none >/dev/null
 
 # Determine the architecture of the disk from the portable GRUB image path
-sudo mount "${loopfile}p1" "${mount}"
+sudo mount -o loop,offset=${efi_partition_offset} "${input}" "${mount}"
 unmount() {
   sudo umount "${mount}"
-  loopdev_remove
 }
 trap unmount EXIT
 grub_blob=$(cd "${mount}" && echo EFI/Boot/*)
@@ -168,20 +177,24 @@ case "${grub_blob}" in
     ;;
 esac
 sudo umount "${mount}"
-trap loopdev_remove EXIT
+
+root_partition_num=2
+root_partition_start=$(partx -g -o START -s -n ${root_partition_num} "${input}" | xargs)
+root_partition_end=$(partx -g -o END -s -n ${root_partition_num} "${input}" | xargs)
+root_partition_offset=$((${root_partition_start} * 512))
 
 # Mount original rootfs and remove previous patching, then tar
-rootfs_uuid=$(sudo blkid -s UUID -o value "${loopfile}p2")
-sudo mount "${loopfile}p2" "${mount}"
+rootfs_uuid=$(/sbin/blkid --probe -s UUID -o value -O ${root_partition_offset} "${input}")
+sudo mount -o loop,offset=${root_partition_offset} "${input}" "${mount}"
 trap unmount EXIT
 sudo rm -f "${mount}"/root/esp.img "${mount}"/root/gpt.img
-sudo rm -f "${mount}"/root/rootfs.tar.lz4
+sudo rm -f "${mount}"/root/rootfs.tar.xz
 sudo rm -f "${mount}"/root/rootfs_uuid
 sudo rm -f "${mount}"/boot/grub/eltorito.img
 sudo rm -f "${mount}"/boot/grub/${grub_arch}/grub.cfg
 sudo rm -rf "${mount}"/tmp/*
 sudo rm -rf "${mount}"/var/tmp/*
-( cd "${mount}" && sudo tar -Szcpf "${workdir}"/rootfs.tar.lz4 * )
+( cd "${mount}" && sudo tar -SJcpf "${workdir}"/rootfs.tar.xz * )
 
 # Prepare a new ESP for the ISO's El Torito image
 mkdir -p "${workdir}/EFI/Boot"
@@ -195,20 +208,34 @@ mcopy -o -i "${workdir}"/eltorito.img -s "${workdir}/EFI" ::
 
 # Build ISO from rootfs
 sudo cp "${workdir}"/esp.img "${workdir}"/gpt.img "${mount}"/root
-sudo cp "${workdir}"/rootfs.tar.lz4 "${workdir}"/install.sh "${mount}"/root
+sudo cp "${workdir}"/rootfs.tar.xz "${workdir}"/install.sh "${mount}"/root
 echo -n "${rootfs_uuid}" | sudo tee "${mount}"/root/rootfs_uuid >/dev/null
 sudo cp "${workdir}"/eltorito.img "${mount}"/boot/grub
 sudo cp "${workdir}"/grub.cfg "${mount}"/boot/grub/${grub_arch}/grub.cfg
+sudo mkdir -p "${mount}"/etc/systemd/system/getty@tty1.service.d
+sudo cp "${workdir}"/override-getty.conf "${mount}"/etc/systemd/system/getty@tty1.service.d/override.conf
+sudo mkdir -p "${mount}"/etc/systemd/system/serial-getty@ttyAMA0.service.d
+sudo cp "${workdir}"/override-serial-getty.conf "${mount}"/etc/systemd/system/serial-getty@ttyAMA0.service.d/override.conf
 sudo chown root:root \
   "${mount}"/root/esp.img "${mount}"/root/gpt.img \
   "${mount}"/boot/grub/eltorito.img \
   "${mount}"/boot/grub/${grub_arch}/grub.cfg
+sudo mv "${mount}"/usr "${mount}"/usr_o
+sudo mkzftree "${mount}"/usr_o "${mount}"/usr
+sudo rm -rf "${mount}"/usr_o
+sudo mv "${mount}"/root "${mount}"/root_o
+sudo mkzftree "${mount}"/root_o "${mount}"/root
+sudo rm -rf "${mount}"/root_o
+sudo mv "${mount}"/var "${mount}"/var_o
+sudo mkzftree "${mount}"/var_o "${mount}"/var
+sudo rm -rf "${mount}"/var_o
 rm -f "${output}"
 touch "${output}"
 sudo xorriso \
   -as mkisofs -r -checksum_algorithm_iso sha256,sha512 -V install "${mount}" \
   -o "${output}" -e boot/grub/eltorito.img -no-emul-boot \
   -append_partition 2 0xef "${workdir}"/eltorito.img \
+  -z \
   -partition_cyl_align all
 
 echo "Output ISO generated at '${output}'."

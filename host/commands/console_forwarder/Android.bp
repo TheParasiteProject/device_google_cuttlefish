@@ -23,7 +23,6 @@ cc_binary {
         "main.cpp",
     ],
     shared_libs: [
-        "libext2_blkid",
         "libbase",
         "libjsoncpp",
         "libcuttlefish_fs",
@@ -33,5 +32,10 @@ cc_binary {
         "libcuttlefish_host_config",
         "libgflags",
     ],
+    target: {
+        darwin: {
+            enabled: true,
+        },
+    },
     defaults: ["cuttlefish_host"],
 }

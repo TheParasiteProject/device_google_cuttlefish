@@ -19,9 +19,11 @@
 #include <sys/epoll.h>
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <shared_mutex>
+#include <string>
 
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/utils/result.h"
@@ -148,7 +150,7 @@ Result<std::optional<EpollEvent>> Epoll::Wait() {
   {
     std::shared_lock lock(epoll_mutex_);
     CF_EXPECT(epoll_fd_->IsOpen(), "Empty Epoll instance");
-    success = epoll_wait(epoll_fd_->fd_, &event, 1, -1);
+    success = TEMP_FAILURE_RETRY(epoll_wait(epoll_fd_->fd_, &event, 1, -1));
   }
   if (success == -1) {
     return CF_ERRNO("epoll_wait failed");

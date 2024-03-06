@@ -40,10 +40,11 @@ class CrosvmManager : public VmManager {
       const CuttlefishConfig::InstanceSpecific& instance) override;
 
   Result<std::unordered_map<std::string, std::string>> ConfigureBootDevices(
-      int num_disks, bool have_gpu) override;
+      const CuttlefishConfig::InstanceSpecific& instance) override;
 
   Result<std::vector<MonitorCommand>> StartCommands(
-      const CuttlefishConfig& config) override;
+      const CuttlefishConfig& config,
+      std::vector<VmmDependencyCommand*>& dependencyCommands) override;
 
  private:
   static constexpr int kCrosvmVmResetExitCode = 32;

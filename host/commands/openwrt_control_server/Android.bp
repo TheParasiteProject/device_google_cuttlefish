@@ -16,7 +16,7 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-cc_library_host_static {
+cc_library {
     name: "libopenwrt_control_server",
     shared_libs: [
         "libprotobuf-cpp-full",
@@ -49,12 +49,14 @@ cc_binary_host {
     shared_libs: [
         "libbase",
         "libcuttlefish_utils",
+        "libcuttlefish_web",
         "libprotobuf-cpp-full",
         "libgrpc++_unsecure",
     ],
     static_libs: [
         "libcuttlefish_host_config",
         "libgflags",
+        "libjsoncpp",
         "libopenwrt_control_server",
         "libgrpc++_reflection",
     ],
@@ -71,6 +73,7 @@ filegroup {
     name: "OpenwrtControlServerProto",
     srcs: [
         "openwrt_control.proto",
+        ":libprotobuf-internal-protos",
     ],
 }
 

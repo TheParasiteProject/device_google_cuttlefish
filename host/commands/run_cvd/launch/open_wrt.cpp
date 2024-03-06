@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include "host/commands/run_cvd/launch/launch.h"
+#include "host/commands/run_cvd/launch/wmediumd_server.h"
 
 #include <string>
 #include <unordered_set>
@@ -37,32 +38,70 @@ namespace {
 
 using APBootFlow = CuttlefishConfig::InstanceSpecific::APBootFlow;
 
+// TODO(b/288987294) Remove dependency to InstanceSpecific config when moving
+// to run_env is completed.
 class OpenWrt : public CommandSource {
  public:
   INJECT(OpenWrt(const CuttlefishConfig& config,
+                 const CuttlefishConfig::EnvironmentSpecific& environment,
                  const CuttlefishConfig::InstanceSpecific& instance,
-                 LogTeeCreator& log_tee))
-      : config_(config), instance_(instance), log_tee_(log_tee) {}
+                 LogTeeCreator& log_tee, WmediumdServer& wmediumd_server))
+      : config_(config),
+        environment_(environment),
+        instance_(instance),
+        log_tee_(log_tee),
+        wmediumd_server_(wmediumd_server) {}
 
   // CommandSource
   Result<std::vector<MonitorCommand>> Commands() override {
     constexpr auto crosvm_for_ap_socket = "ap_control.sock";
 
     CrosvmBuilder ap_cmd;
+
+    ap_cmd.Cmd().AddPrerequisite([this]() -> Result<void> {
+      return wmediumd_server_.WaitForAvailability();
+    });
+
     ap_cmd.ApplyProcessRestarter(instance_.crosvm_binary(),
+                                 /*first_time_argument=*/"",
                                  kOpenwrtVmResetExitCode);
     ap_cmd.Cmd().AddParameter("run");
     ap_cmd.AddControlSocket(
         instance_.PerInstanceInternalUdsPath(crosvm_for_ap_socket),
         instance_.crosvm_binary());
 
+    ap_cmd.Cmd().AddParameter("--no-usb");
     ap_cmd.Cmd().AddParameter("--core-scheduling=false");
 
-    if (!config_.vhost_user_mac80211_hwsim().empty()) {
+    if (!environment_.vhost_user_mac80211_hwsim().empty()) {
       ap_cmd.Cmd().AddParameter("--vhost-user-mac80211-hwsim=",
-                                config_.vhost_user_mac80211_hwsim());
+                                environment_.vhost_user_mac80211_hwsim());
     }
-    SharedFD wifi_tap = ap_cmd.AddTap(instance_.wifi_tap_name());
+    SharedFD wifi_tap;
+    if (environment_.enable_wifi()) {
+      wifi_tap = ap_cmd.AddTap(instance_.wifi_tap_name());
+    }
+
+    const std::string snapshot_dir = config_.snapshot_path();
+    if (!snapshot_dir.empty()) {
+      CF_EXPECT(ap_cmd.SetToRestoreFromSnapshot(snapshot_dir, instance_.id(),
+                                                "_openwrt"));
+    }
+
+    /* TODO(kwstephenkim): delete this code when Minidroid completely disables
+     * the AP VM itself
+     */
+    if (!instance_.crosvm_use_balloon()) {
+      ap_cmd.Cmd().AddParameter("--no-balloon");
+    }
+
+    /* TODO(kwstephenkim): delete this code when Minidroid completely disables
+     * the AP VM itself
+     */
+    if (!instance_.crosvm_use_rng()) {
+      ap_cmd.Cmd().AddParameter("--no-rng");
+    }
+
     if (instance_.enable_sandbox()) {
       ap_cmd.Cmd().AddParameter("--seccomp-policy-dir=",
                                 instance_.seccomp_policy_dir());
@@ -80,7 +119,13 @@ class OpenWrt : public CommandSource {
     auto openwrt_args = OpenwrtArgsFromConfig(instance_);
     switch (instance_.ap_boot_flow()) {
       case APBootFlow::Grub:
-        ap_cmd.AddReadWriteDisk(instance_.persistent_ap_composite_disk_path());
+        if (config_.vm_manager() == "qemu_cli") {
+          ap_cmd.AddReadWriteDisk(
+              instance_.persistent_ap_composite_overlay_path());
+        } else {
+          ap_cmd.AddReadWriteDisk(
+              instance_.persistent_ap_composite_disk_path());
+        }
         ap_cmd.Cmd().AddParameter("--bios=", instance_.bootloader());
         break;
       case APBootFlow::LegacyDirect:
@@ -98,7 +143,7 @@ class OpenWrt : public CommandSource {
 
     std::vector<MonitorCommand> commands;
     commands.emplace_back(
-        std::move(log_tee_.CreateLogTee(ap_cmd.Cmd(), "openwrt")));
+        CF_EXPECT(log_tee_.CreateLogTee(ap_cmd.Cmd(), "openwrt")));
     commands.emplace_back(std::move(ap_cmd.Cmd()));
     return commands;
   }
@@ -112,20 +157,22 @@ class OpenWrt : public CommandSource {
 
  private:
   std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
-  bool Setup() override { return true; }
+  Result<void> ResultSetup() override { return {}; }
 
   const CuttlefishConfig& config_;
+  const CuttlefishConfig::EnvironmentSpecific& environment_;
   const CuttlefishConfig::InstanceSpecific& instance_;
   LogTeeCreator& log_tee_;
+  WmediumdServer& wmediumd_server_;
 
   static constexpr int kOpenwrtVmResetExitCode = 32;
 };
 
 }  // namespace
 
-fruit::Component<
-    fruit::Required<const CuttlefishConfig,
-                    const CuttlefishConfig::InstanceSpecific, LogTeeCreator>>
+fruit::Component<fruit::Required<
+    const CuttlefishConfig, const CuttlefishConfig::EnvironmentSpecific,
+    const CuttlefishConfig::InstanceSpecific, LogTeeCreator, WmediumdServer>>
 OpenWrtComponent() {
   return fruit::createComponent()
       .addMultibinding<CommandSource, OpenWrt>()

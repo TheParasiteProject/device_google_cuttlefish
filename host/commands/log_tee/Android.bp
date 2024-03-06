@@ -23,18 +23,24 @@ cc_binary {
         "log_tee.cpp",
     ],
     shared_libs: [
-        "libext2_blkid",
+        "libbase",
+	"libcuttlefish_command_util",
+        "libcuttlefish_device_config",
+        "libcuttlefish_device_config_proto",
         "libcuttlefish_fs",
         "libcuttlefish_utils",
-        "libbase",
         "libfruit",
         "libjsoncpp",
-        "libnl",
     ],
     static_libs: [
         "libgflags",
         "libcuttlefish_host_config",
         "libcuttlefish_vm_manager",
     ],
-    defaults: ["cuttlefish_host", "cuttlefish_libicuuc"],
+    target: {
+        darwin: {
+            enabled: true,
+        },
+    },
+    defaults: ["cuttlefish_host"],
 }

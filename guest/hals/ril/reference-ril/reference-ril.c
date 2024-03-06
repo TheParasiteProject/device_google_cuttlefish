@@ -560,11 +560,13 @@ static void set_Ip_Addr(const char *addr, const char* radioInterfaceName) {
   strncpy(request.ifr_name, radioInterfaceName, sizeof(request.ifr_name));
   request.ifr_name[sizeof(request.ifr_name) - 1] = '\0';
 
+  int pfxlen = 0;
   char *myaddr = strdup(addr);
   char *pch = NULL;
   pch = strchr(myaddr, '/');
   if (pch) {
     *pch = '\0';
+    pfxlen = atoi(++pch);
   }
 
   if (family == AF_INET) {
@@ -574,6 +576,10 @@ static void set_Ip_Addr(const char *addr, const char* radioInterfaceName) {
     if (ioctl(sock, SIOCSIFADDR, &request) < 0) {
       RLOGE("%s: SIOCSIFADDR IPv4 failed.", __func__);
     }
+    sin->sin_addr.s_addr = htonl(0xFFFFFFFFu << (32 - (pfxlen ?: 32)));
+    if (ioctl(sock, SIOCSIFNETMASK, &request) < 0) {
+      RLOGE("%s: SIOCSIFNETMASK failed.", __func__);
+    }
   } else {
     if (ioctl(sock, SIOGIFINDEX, &request) < 0) {
       RLOGE("%s: SIOCGIFINDEX failed.", __func__);
@@ -581,7 +587,7 @@ static void set_Ip_Addr(const char *addr, const char* radioInterfaceName) {
 
     struct in6_ifreq req6 = {
        // struct in6_addr ifr6_addr;
-       .ifr6_prefixlen = 64,  // __u32
+       .ifr6_prefixlen = pfxlen ?: 128,  // __u32
        .ifr6_ifindex = request.ifr_ifindex,  // int
     };
     if (inet_pton(AF_INET6, myaddr, &req6.ifr6_addr) != 1) {
@@ -1573,23 +1579,22 @@ static void requestDeviceIdentity(int request __unused, void *data __unused,
     int commas;
     int skip;
     int count = 4;
-
-    // Fixed values. TODO: Query modem
-    responseStr[0] ="358240051111110";
-    responseStr[1] =  "";
-    responseStr[2] = "77777777";
-    responseStr[3] = ""; // default empty for non-CDMA
+    char meid[14] = {0};
 
     err = at_send_command_numeric("AT+CGSN", &p_response);
     if (err < 0 || p_response->success == 0) {
         RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
         return;
-    } else {
-        if (TECH_BIT(sMdmInfo) == MDM_CDMA) {
-            responseStr[3] = p_response->p_intermediates->line;
-        } else {
-            responseStr[0] = p_response->p_intermediates->line;
-        }
+    }
+
+    responseStr[0] = p_response->p_intermediates->line;
+    responseStr[1] = "";
+    responseStr[2] = "77777777";
+    responseStr[3] = "";  // default empty for non-CDMA
+
+    if (TECH_BIT(sMdmInfo) == MDM_CDMA) {
+        strncpy(meid, responseStr[0], sizeof(meid));
+        responseStr[3] = meid;
     }
 
     RIL_onRequestComplete(t, RIL_E_SUCCESS, responseStr, count*sizeof(char*));

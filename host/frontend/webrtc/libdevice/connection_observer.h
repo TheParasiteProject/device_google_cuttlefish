@@ -42,13 +42,15 @@ class ConnectionObserver {
 
   virtual void OnConnected() = 0;
 
-  virtual void OnTouchEvent(const std::string& display_label, int x, int y,
+  virtual void OnTouchEvent(const std::string& device_label, int x, int y,
                             bool down) = 0;
   virtual void OnMultiTouchEvent(const std::string& label, Json::Value id,
                                  Json::Value slot, Json::Value x, Json::Value y,
                                  bool down, int size) = 0;
 
   virtual void OnKeyboardEvent(uint16_t keycode, bool down) = 0;
+
+  virtual void OnWheelEvent(int pixels) = 0;
 
   virtual void OnAdbChannelOpen(
       std::function<bool(const uint8_t*, size_t)> adb_message_sender) = 0;
@@ -68,10 +70,18 @@ class ConnectionObserver {
                                     const std::string& button_state) = 0;
 
   virtual void OnCameraControlMsg(const Json::Value& msg) = 0;
+  virtual void OnDisplayControlMsg(const Json::Value& msg) = 0;
 
   virtual void OnBluetoothChannelOpen(
       std::function<bool(const uint8_t*, size_t)> bluetooth_message_sender) = 0;
   virtual void OnBluetoothMessage(const uint8_t* msg, size_t size) = 0;
+  virtual void OnSensorsChannelOpen(
+      std::function<bool(const uint8_t*, size_t)> sensors_message_sender) = 0;
+  virtual void OnSensorsMessage(const uint8_t* msg, size_t size) = 0;
+  virtual void OnSensorsChannelClosed() = 0;
+  virtual void OnLightsChannelOpen(
+      std::function<bool(const Json::Value&)> lights_message_sender) = 0;
+  virtual void OnLightsChannelClosed() = 0;
   virtual void OnLocationChannelOpen(
       std::function<bool(const uint8_t*, size_t)> location_message_sender) = 0;
   virtual void OnLocationMessage(const uint8_t* msg, size_t size) = 0;

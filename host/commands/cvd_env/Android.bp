@@ -24,23 +24,28 @@ cc_binary_host {
     ],
     shared_libs: [
         "libbase",
-        "libcuttlefish_fs",
+        "libcuttlefish_device_config",
         "libcuttlefish_utils",
-        "libfruit",
-        "libjsoncpp",
         "libgrpc++",
+        "libjsoncpp",
         "libprotobuf-cpp-full",
     ],
     static_libs: [
-        "libc++fs",
-        "libcuttlefish_host_config",
-        "libcuttlefish_vm_manager",
-        "libgflags",
         "grpc_cli_libs",
+        "libabsl_host",
+        "libc++fs",
+        "libcuttlefish_control_env",
+        "libcuttlefish_host_config",
+        "libgflags",
     ],
     cflags: [
         "-Wno-unused-parameter",
     ],
     cpp_std: "c++17",
-    defaults: ["cuttlefish_host", "cuttlefish_libicuuc"],
+    defaults: ["cuttlefish_host"],
+    target: {
+        darwin: {
+            enabled: true,
+        },
+    },
 }

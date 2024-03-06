@@ -36,13 +36,14 @@ class AdbConfigFlagImpl : public AdbConfigFlag {
       }
       return modes.str().substr(1);  // First comma
     });
-    mode_flag_.Setter([this](const FlagMatch& match) {
+    mode_flag_.Setter([this](const FlagMatch& match) -> Result<void> {
       // TODO(schuffelen): Error on unknown types?
       std::set<AdbMode> modes;
       for (auto& mode : android::base::Split(match.value, ",")) {
         modes.insert(StringToAdbMode(mode));
       }
-      return config_.SetModes(modes);
+      CF_EXPECT(config_.SetModes(modes));
+      return {};
     });
   }
 
@@ -52,15 +53,13 @@ class AdbConfigFlagImpl : public AdbConfigFlag {
     return {static_cast<FlagFeature*>(&config_flag_)};
   }
 
-  bool Process(std::vector<std::string>& args) override {
+  Result<void> Process(std::vector<std::string>& args) override {
     // Defaults
     config_.SetModes({AdbMode::VsockHalfTunnel});
     bool run_adb_connector = !IsRunningInContainer();
     Flag run_flag = GflagsCompatFlag("run_adb_connector", run_adb_connector);
-    if (!ParseFlags({run_flag, mode_flag_}, args)) {
-      LOG(ERROR) << "Failed to parse adb config flags";
-      return false;
-    }
+    CF_EXPECT(ParseFlags({run_flag, mode_flag_}, args),
+              "Failed to parse adb config flags");
     config_.SetRunConnector(run_adb_connector);
 
     auto adb_modes_check = config_.Modes();
@@ -69,7 +68,7 @@ class AdbConfigFlagImpl : public AdbConfigFlag {
       LOG(INFO) << "ADB not enabled";
     }
 
-    return true;
+    return {};
   }
   bool WriteGflagsCompatHelpXml(std::ostream& out) const override {
     bool run = config_.RunConnector();

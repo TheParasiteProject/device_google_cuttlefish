@@ -28,7 +28,27 @@
 
 #include <android-base/logging.h>
 
+#define DEFAULT_MSGQ_KEY 0x1234
+#define HASH_MULTIPLIER 5381
+
 namespace cuttlefish {
+
+key_t GenerateQueueKey(const char* str) {
+  if (str == nullptr || *str == '\0') {
+    LOG(ERROR) << "Invalid queue name provided: " << str;
+    LOG(ERROR) << "Using default msg queue key: " << DEFAULT_MSGQ_KEY;
+    return DEFAULT_MSGQ_KEY;
+  }
+
+  uint64_t hash = HASH_MULTIPLIER;
+  int c;
+
+  while ((c = *str++)) {
+    hash = ((hash << 5) + hash) + c;
+  }
+
+  return static_cast<key_t>(hash);
+}
 
 // class holds `msgid` returned from msg_queue_create, and match the lifetime of
 // the message queue to the lifetime of the object.
@@ -46,19 +66,9 @@ SysVMessageQueue::~SysVMessageQueue(void) {
 // SysVMessageQueue::Create would return an empty/null std::unique_ptr if
 // initialization failed.
 std::unique_ptr<SysVMessageQueue> SysVMessageQueue::Create(
-    const std::string& path, char proj_id, bool auto_close) {
-  // key file must exist before calling ftok
-  std::fstream fs;
-  fs.open(path, std::ios::out);
-  fs.close();
+    const std::string& queue_name, bool auto_close) {
+  key_t key = GenerateQueueKey(queue_name.c_str());
 
-  // only the owning user has access
-  key_t key = ftok(path.c_str(), proj_id);
-  if (key < 0) {
-    int error_num = errno;
-    LOG(ERROR) << "Could not ftok to create IPC key: " << strerror(error_num);
-    return NULL;
-  }
   int queue_id = msgget(key, 0);
   if (queue_id < 0) {
     queue_id = msgget(key, IPC_CREAT | IPC_EXCL | 0600);
@@ -89,10 +99,21 @@ int SysVMessageQueue::Send(void* data, size_t size, bool block) {
 // type less than or equal to the absolute value of msgtyp will be read.
 ssize_t SysVMessageQueue::Receive(void* data, size_t size, long msgtyp,
                                   bool block) {
+  // Ensure data buffer has space for message type
+  if (size < sizeof(long)) {
+    LOG(ERROR) << "receive: buffer size too small";
+    return -1;
+  }
   // System call fails with errno set to ENOMSG if queue is empty and
   // non-blocking.
   int msgflg = block ? 0 : IPC_NOWAIT;
-  return msgrcv(msgid_, data, size, msgtyp, msgflg);
+  ssize_t result = msgrcv(msgid_, data, size, msgtyp, msgflg);
+  if (result == -1) {
+    LOG(ERROR) << "receive: failed to receive any messages. Error: "
+               << strerror(errno);
+  }
+
+  return result;
 }
 
 }  // namespace cuttlefish

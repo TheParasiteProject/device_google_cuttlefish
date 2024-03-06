@@ -14,7 +14,11 @@
 // limitations under the License.
 
 #include <signal.h>
+#ifdef __linux__
 #include <sys/signalfd.h>
+#endif
+
+#include <regex>
 
 #include <android-base/logging.h>
 #include <android-base/strings.h>
@@ -26,6 +30,27 @@
 
 DEFINE_string(process_name, "", "The process to credit log messages to");
 DEFINE_int32(log_fd_in, -1, "The file descriptor to read logs from.");
+
+// Crosvm formats logs starting with a local ISO 8601 timestamp and then a
+// log level (based on external/crosvm/base/src/syslog.rs).
+const std::regex kCrosvmLogPattern(
+    "^\\["
+    "\\d{4}" /* year */
+    "-"
+    "\\d{2}" /* month */
+    "-"
+    "\\d{2}" /* day */
+    "T"
+    "\\d{2}" /* hour */
+    ":"
+    "\\d{2}" /* minute*/
+    ":"
+    "\\d{2}" /* second */
+    "\\."
+    "\\d{9}"                          /* millisecond */
+    "(Z|[+-]\\d{2}(:\\d{2}|\\d{2})?)" /* timezone */
+    "\\s"
+    "(ERROR|WARN|INFO|DEBUG|TRACE)");
 
 int main(int argc, char** argv) {
   ::android::base::InitLogging(argv, android::base::StderrLogger);
@@ -61,10 +86,12 @@ int main(int argc, char** argv) {
   sigaddset(&mask, SIGINT);
   CHECK(sigprocmask(SIG_BLOCK, &mask, NULL) == 0)
       << "sigprocmask failed: " << strerror(errno);
+#ifdef __linux__
   int sfd = signalfd(-1, &mask, 0);
   CHECK(sfd >= 0) << "signalfd failed: " << strerror(errno);
   auto int_fd = cuttlefish::SharedFD::Dup(sfd);
   close(sfd);
+#endif
 
   auto poll_fds = std::vector<cuttlefish::PollSharedFd>{
       cuttlefish::PollSharedFd{
@@ -72,11 +99,13 @@ int main(int argc, char** argv) {
           .events = POLL_IN,
           .revents = 0,
       },
+#ifdef __linux__
       cuttlefish::PollSharedFd{
           .fd = int_fd,
           .events = POLL_IN,
           .revents = 0,
       },
+#endif
   };
 
   LOG(DEBUG) << "Starting to read from process " << FLAGS_process_name;
@@ -109,10 +138,6 @@ int main(int argc, char** argv) {
       // These checks attempt to determine the log severity coming from crosvm.
       // There is no guarantee of success all the time since log line boundaries
       // could be out sync with the reads, but that's ok.
-      //
-      // TODO(b/270424669): These checks are wrong, the format is
-      // "[<timestamp> ERROR". Maybe just stop bothering and send
-      // everything to LOG(DEBUG).
       if (android::base::StartsWith(trimmed, "[INFO")) {
         LOG(DEBUG) << trimmed;
       } else if (android::base::StartsWith(trimmed, "[ERROR")) {
@@ -122,13 +147,34 @@ int main(int argc, char** argv) {
       } else if (android::base::StartsWith(trimmed, "[VERBOSE")) {
         LOG(VERBOSE) << trimmed;
       } else {
-        LOG(DEBUG) << trimmed;
+        std::smatch match_result;
+        if (std::regex_search(trimmed, match_result, kCrosvmLogPattern)) {
+          if (match_result.size() == 4) {
+            const auto& level = match_result[3];
+            if (level == "ERROR") {
+              LOG(ERROR) << trimmed;
+            } else if (level == "WARN") {
+              LOG(WARNING) << trimmed;
+            } else if (level == "INFO") {
+              LOG(INFO) << trimmed;
+            } else if (level == "DEBUG") {
+              LOG(DEBUG) << trimmed;
+            } else if (level == "TRACE") {
+              LOG(VERBOSE) << trimmed;
+            } else {
+              LOG(DEBUG) << trimmed;
+            }
+          }
+        } else {
+          LOG(DEBUG) << trimmed;
+        }
       }
 
       // Go back to polling immediately to see if there is more data, don't
       // handle any signals yet.
       continue;
     }
+#ifdef __linux__
     if (poll_fds[1].revents) {
       struct signalfd_siginfo siginfo;
       int s = int_fd->Read(&siginfo, sizeof(siginfo));
@@ -138,6 +184,7 @@ int main(int argc, char** argv) {
           << "unexpected signal: " << siginfo.ssi_signo;
       break;
     }
+#endif
   }
 
   LOG(DEBUG) << "Finished reading from process " << FLAGS_process_name;

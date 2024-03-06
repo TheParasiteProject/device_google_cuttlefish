@@ -14,81 +14,82 @@
 // limitations under the License.
 
 #include <android-base/logging.h>
-#include <android-base/strings.h>
-#include <curl/curl.h>
-#include <gflags/gflags.h>
-#include <json/json.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <sys/ioctl.h>
-#include <sys/time.h>
-#include <sys/utsname.h>
-#include <chrono>
-#include <ctime>
-#include <iostream>
 
-#include "common/libs/utils/tee_logging.h"
 #include "host/commands/metrics/events.h"
 #include "host/commands/metrics/host_receiver.h"
+#include "host/commands/metrics/metrics_configs.h"
 #include "host/commands/metrics/metrics_defs.h"
-#include "host/commands/metrics/proto/cf_metrics_proto.h"
-#include "host/libs/config/cuttlefish_config.h"
+#include "host/commands/metrics/proto/cf_metrics_protos.h"
 #include "host/libs/metrics/metrics_receiver.h"
 #include "host/libs/msg_queue/msg_queue.h"
-#include "host/libs/vm_manager/crosvm_manager.h"
-#include "host/libs/vm_manager/qemu_manager.h"
 
 using cuttlefish::MetricsExitCodes;
 
 namespace cuttlefish {
 
-MetricsHostReceiver::MetricsHostReceiver(
-    const cuttlefish::CuttlefishConfig& config)
-    : config_(config) {}
+MetricsHostReceiver::MetricsHostReceiver(bool is_metrics_enabled)
+    : is_metrics_enabled_(is_metrics_enabled) {}
 
 MetricsHostReceiver::~MetricsHostReceiver() {}
 
 void MetricsHostReceiver::ServerLoop() {
-  auto msg_queue = cuttlefish::SysVMessageQueue::Create("cuttlefish_ipc", 'a');
+  auto msg_queue = SysVMessageQueue::Create(metrics_queue_name_);
   if (msg_queue == NULL) {
-    LOG(FATAL) << "create: failed to create cuttlefish_ipc";
+    LOG(FATAL) << "create: failed to create" << metrics_queue_name_;
   }
 
   struct msg_buffer msg = {0, {0}};
-  while (1) {
+  while (true) {
     int rc = msg_queue->Receive(&msg, MAX_MSG_SIZE, 1, true);
     if (rc == -1) {
       LOG(FATAL) << "receive: failed to receive any messages";
     }
+
     std::string text(msg.mesg_text);
     LOG(INFO) << "Metrics host received: " << text;
-    auto hostDev = cuttlefish::CuttlefishLogEvent::CUTTLEFISH_DEVICE_TYPE_HOST;
-    if (text == "VMStart") {
-      rc = Clearcut::SendVMStart(hostDev);
-    } else if (text == "VMStop") {
-      rc = Clearcut::SendVMStop(hostDev);
-    } else if (text == "DeviceBoot") {
-      rc = Clearcut::SendDeviceBoot(hostDev);
-    } else if (text == "LockScreen") {
-      rc = Clearcut::SendLockScreen(hostDev);
-    }
-    if (rc != MetricsExitCodes::kSuccess) {
-      LOG(ERROR) << "Message failed to send to ClearCut: " << text;
-    }
+
+    // Process the received message
+    ProcessMessage(text);
+
     sleep(1);
   }
 }
 
 void MetricsHostReceiver::Join() { thread_.join(); }
 
-bool MetricsHostReceiver::Initialize() {
-  if (!config_.enable_metrics()) {
+bool MetricsHostReceiver::Initialize(const std::string& metrics_queue_name) {
+  metrics_queue_name_ = metrics_queue_name;
+  if (!is_metrics_enabled_) {
     LOG(ERROR) << "init: metrics not enabled";
     return false;
   }
+
+  // Start the server loop in a separate thread
   thread_ = std::thread(&MetricsHostReceiver::ServerLoop, this);
   return true;
+}
+
+void MetricsHostReceiver::ProcessMessage(const std::string& text) {
+  auto hostDev = cuttlefish::CuttlefishLogEvent::CUTTLEFISH_DEVICE_TYPE_HOST;
+
+  int rc = MetricsExitCodes::kSuccess;
+
+  if (text == "VMStart") {
+    rc = Clearcut::SendVMStart(hostDev);
+  } else if (text == "VMStop") {
+    rc = Clearcut::SendVMStop(hostDev);
+  } else if (text == "DeviceBoot") {
+    rc = Clearcut::SendDeviceBoot(hostDev);
+  } else if (text == "LockScreen") {
+    rc = Clearcut::SendLockScreen(hostDev);
+  } else {
+    LOG(ERROR) << "Message not recognized: " << text;
+    rc = MetricsExitCodes::kMetricsError;
+  }
+
+  if (rc != MetricsExitCodes::kSuccess) {
+    LOG(ERROR) << "Message failed to send to ClearCut: " << text;
+  }
 }
 
 }  // namespace cuttlefish

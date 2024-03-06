@@ -103,6 +103,7 @@ class StreamerSockets : public virtual SetupFeature {
         cmd.AppendToLastParameter(",", touch_servers_[i]);
       }
     }
+    cmd.AddParameter("-rotary_fd=", rotary_server_);
     cmd.AddParameter("-keyboard_fd=", keyboard_server_);
     cmd.AddParameter("-frame_server_fd=", frames_server_);
     if (instance_.enable_audio()) {
@@ -110,6 +111,8 @@ class StreamerSockets : public virtual SetupFeature {
     }
     cmd.AddParameter("--confui_in_fd=", confui_in_fd_);
     cmd.AddParameter("--confui_out_fd=", confui_out_fd_);
+    cmd.AddParameter("--sensors_in_fd=", sensors_host_to_guest_fd_);
+    cmd.AddParameter("--sensors_out_fd=", sensors_guest_to_host_fd_);
   }
 
   // SetupFeature
@@ -124,19 +127,19 @@ class StreamerSockets : public virtual SetupFeature {
   std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
 
   Result<void> ResultSetup() override {
-    auto use_vsockets = config_.vm_manager() == vm_manager::QemuManager::name();
-    for (int i = 0; i < instance_.display_configs().size(); ++i) {
+    int display_cnt = instance_.display_configs().size();
+    int touchpad_cnt = instance_.touchpad_configs().size();
+    for (int i = 0; i < display_cnt + touchpad_cnt; ++i) {
       SharedFD touch_socket =
-          use_vsockets ? SharedFD::VsockServer(instance_.touch_server_port(),
-                                               SOCK_STREAM)
-                       : CreateUnixInputServer(instance_.touch_socket_path(i));
+          CreateUnixInputServer(instance_.touch_socket_path(i));
       CF_EXPECT(touch_socket->IsOpen(), touch_socket->StrError());
       touch_servers_.emplace_back(std::move(touch_socket));
     }
-    keyboard_server_ =
-        use_vsockets ? SharedFD::VsockServer(instance_.keyboard_server_port(),
-                                             SOCK_STREAM)
-                     : CreateUnixInputServer(instance_.keyboard_socket_path());
+    rotary_server_ =
+        CreateUnixInputServer(instance_.rotary_socket_path());
+
+    CF_EXPECT(rotary_server_->IsOpen(), rotary_server_->StrError());
+    keyboard_server_ = CreateUnixInputServer(instance_.keyboard_socket_path());
     CF_EXPECT(keyboard_server_->IsOpen(), keyboard_server_->StrError());
 
     frames_server_ = CreateUnixInputServer(instance_.frames_socket_path());
@@ -148,38 +151,42 @@ class StreamerSockets : public virtual SetupFeature {
           SharedFD::SocketLocalServer(path, false, SOCK_SEQPACKET, 0666);
       CF_EXPECT(audio_server_->IsOpen(), audio_server_->StrError());
     }
-    AddConfUiFifo();
+    CF_EXPECT(InitializeVConsoles());
     return {};
   }
 
-  Result<void> AddConfUiFifo() {
+  Result<void> InitializeVConsoles() {
     std::vector<std::string> fifo_files = {
         instance_.PerInstanceInternalPath("confui_fifo_vm.in"),
-        instance_.PerInstanceInternalPath("confui_fifo_vm.out")};
+        instance_.PerInstanceInternalPath("confui_fifo_vm.out"),
+        instance_.PerInstanceInternalPath("sensors_fifo_vm.in"),
+        instance_.PerInstanceInternalPath("sensors_fifo_vm.out"),
+    };
     for (const auto& path : fifo_files) {
       unlink(path.c_str());
     }
     std::vector<SharedFD> fds;
     for (const auto& path : fifo_files) {
-      CF_EXPECT(mkfifo(path.c_str(), 0660) == 0, "Could not create " << path);
-      auto fd = SharedFD::Open(path, O_RDWR);
-      CF_EXPECT(fd->IsOpen(),
-                "Could not open " << path << ": " << fd->StrError());
-      fds.emplace_back(fd);
+      fds.emplace_back(CF_EXPECT(SharedFD::Fifo(path, 0660)));
     }
     confui_in_fd_ = fds[0];
     confui_out_fd_ = fds[1];
+    sensors_host_to_guest_fd_ = fds[2];
+    sensors_guest_to_host_fd_ = fds[3];
     return {};
   }
 
   const CuttlefishConfig& config_;
   const CuttlefishConfig::InstanceSpecific& instance_;
   std::vector<SharedFD> touch_servers_;
+  SharedFD rotary_server_;
   SharedFD keyboard_server_;
   SharedFD frames_server_;
   SharedFD audio_server_;
   SharedFD confui_in_fd_;   // host -> guest
   SharedFD confui_out_fd_;  // guest -> host
+  SharedFD sensors_host_to_guest_fd_;
+  SharedFD sensors_guest_to_host_fd_;
 };
 
 class WebRtcServer : public virtual CommandSource,
@@ -190,12 +197,14 @@ class WebRtcServer : public virtual CommandSource,
                       const CuttlefishConfig::InstanceSpecific& instance,
                       StreamerSockets& sockets,
                       KernelLogPipeProvider& log_pipe_provider,
-                      const CustomActionConfigProvider& custom_action_config))
+                      const CustomActionConfigProvider& custom_action_config,
+                      WebRtcRecorder& webrtc_recorder))
       : config_(config),
         instance_(instance),
         sockets_(sockets),
         log_pipe_provider_(log_pipe_provider),
-        custom_action_config_(custom_action_config) {}
+        custom_action_config_(custom_action_config),
+        webrtc_recorder_(webrtc_recorder) {}
   // DiagnosticInformation
   std::vector<std::string> Diagnostics() const override {
     if (!Enabled() ||
@@ -233,27 +242,17 @@ class WebRtcServer : public virtual CommandSource,
       commands.emplace_back(std::move(sig_proxy));
     }
 
-    auto stopper = [host_socket = std::move(host_socket_)](Subprocess* proc) {
-      struct timeval timeout;
-      timeout.tv_sec = 3;
-      timeout.tv_usec = 0;
-      CHECK(host_socket->SetSockOpt(SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                                    sizeof(timeout)) == 0)
-          << "Could not set receive timeout";
-
-      WriteAll(host_socket, "C");
-      char response[1];
-      int read_ret = host_socket->Read(response, sizeof(response));
-      if (read_ret != 0) {
-        LOG(ERROR) << "Failed to read response from webrtc";
-        return KillSubprocess(proc);
-      }
+    auto stopper = [webrtc_recorder = webrtc_recorder_](Subprocess* proc) {
+      webrtc_recorder.SendStopRecordingCommand();
       return KillSubprocess(proc) == StopperResult::kStopSuccess
                  ? StopperResult::kStopCrash
                  : StopperResult::kStopFailure;
     };
 
     Command webrtc(WebRtcBinary(), stopper);
+
+    webrtc.AddParameter("-group_id=", instance_.group_id());
+
     webrtc.UnsetFromEnvironment("http_proxy");
     sockets_.AppendCommandArguments(webrtc);
     if (config_.vm_manager() == vm_manager::CrosvmManager::name()) {
@@ -266,7 +265,7 @@ class WebRtcServer : public virtual CommandSource,
     // issue is mitigated slightly by doing some retrying and backoff in the
     // webrtc process when connecting to the websocket, so it shouldn't be an
     // issue most of the time.
-    webrtc.AddParameter("--command_fd=", client_socket_);
+    webrtc.AddParameter("--command_fd=", webrtc_recorder_.GetClientSocket());
     webrtc.AddParameter("-kernel_log_events_fd=", kernel_log_events_pipe_);
     webrtc.AddParameter("-client_dir=",
                         DefaultHostArtifactsPath("usr/share/webrtc/assets"));
@@ -290,13 +289,11 @@ class WebRtcServer : public virtual CommandSource,
   std::string Name() const override { return "WebRtcServer"; }
   std::unordered_set<SetupFeature*> Dependencies() const override {
     return {static_cast<SetupFeature*>(&sockets_),
-            static_cast<SetupFeature*>(&log_pipe_provider_)};
+            static_cast<SetupFeature*>(&log_pipe_provider_),
+            static_cast<SetupFeature*>(&webrtc_recorder_)};
   }
 
   Result<void> ResultSetup() override {
-    CF_EXPECT(SharedFD::SocketPair(AF_LOCAL, SOCK_STREAM, 0, &client_socket_,
-                                   &host_socket_),
-              client_socket_->StrError());
     if (config_.vm_manager() == vm_manager::CrosvmManager::name()) {
       switches_server_ =
           CreateUnixInputServer(instance_.switches_socket_path());
@@ -313,17 +310,17 @@ class WebRtcServer : public virtual CommandSource,
   StreamerSockets& sockets_;
   KernelLogPipeProvider& log_pipe_provider_;
   const CustomActionConfigProvider& custom_action_config_;
+  WebRtcRecorder& webrtc_recorder_;
   SharedFD kernel_log_events_pipe_;
-  SharedFD client_socket_;
-  SharedFD host_socket_;
   SharedFD switches_server_;
 };
 
 }  // namespace
 
-fruit::Component<fruit::Required<const CuttlefishConfig, KernelLogPipeProvider,
-                                 const CuttlefishConfig::InstanceSpecific,
-                                 const CustomActionConfigProvider>>
+fruit::Component<
+    fruit::Required<const CuttlefishConfig, KernelLogPipeProvider,
+                    const CuttlefishConfig::InstanceSpecific,
+                    const CustomActionConfigProvider, WebRtcRecorder>>
 launchStreamerComponent() {
   return fruit::createComponent()
       .addMultibinding<CommandSource, WebRtcServer>()

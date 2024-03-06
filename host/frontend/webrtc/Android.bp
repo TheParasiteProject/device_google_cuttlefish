@@ -23,6 +23,8 @@ cc_binary_host {
         "adb_handler.cpp",
         "audio_handler.cpp",
         "bluetooth_handler.cpp",
+        "sensors_handler.cpp",
+        "sensors_simulator.cpp",
         "location_handler.cpp",
         "gpx_locations_handler.cpp",
         "kml_locations_handler.cpp",
@@ -44,6 +46,7 @@ cc_binary_host {
         "webrtc_signaling_headers",
         "libwebrtc_absl_headers",
         "libcuttlefish_confui_host_headers",
+        "libeigen",
     ],
     static_libs: [
         "libaom",
@@ -53,6 +56,7 @@ cc_binary_host {
         "libcuttlefish_confui",
         "libcuttlefish_confui_host",
         "libcuttlefish_host_config",
+        "libcuttlefish_input_connector",
         "libcuttlefish_security",
         "libcuttlefish_screen_connector",
         "libcuttlefish_utils",
@@ -79,7 +83,6 @@ cc_binary_host {
         "liblocation",
     ],
     shared_libs: [
-        "libext2_blkid",
         "android.hardware.keymaster@4.0",
         "libbase",
         "libcrypto",

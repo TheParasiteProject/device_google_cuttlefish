@@ -56,12 +56,6 @@ class RootCanal : public CommandSource {
     rootcanal.AddParameter("--link_ble_port=",
                            config_.rootcanal_link_ble_port());
 
-    // Bluetooth configuration.
-    rootcanal.AddParameter("--controller_properties_file=",
-                           config_.rootcanal_config_file());
-    rootcanal.AddParameter("--default_commands_file=",
-                           config_.rootcanal_default_commands_file());
-
     // Add parameters from passthrough option --rootcanal-args
     for (auto const& arg : config_.rootcanal_args()) {
       rootcanal.AddParameter(arg);
@@ -70,6 +64,8 @@ class RootCanal : public CommandSource {
     // Add command for forwarding the HCI port to a vsock server.
     Command hci_vsock_proxy(SocketVsockProxyBinary());
     hci_vsock_proxy.AddParameter("--server_type=vsock");
+    hci_vsock_proxy.AddParameter("--server_vsock_id=",
+                                 instance_.vsock_guest_cid());
     hci_vsock_proxy.AddParameter("--server_vsock_port=",
                                  config_.rootcanal_hci_port());
     hci_vsock_proxy.AddParameter("--client_type=tcp");
@@ -80,6 +76,8 @@ class RootCanal : public CommandSource {
     // Add command for forwarding the test port to a vsock server.
     Command test_vsock_proxy(SocketVsockProxyBinary());
     test_vsock_proxy.AddParameter("--server_type=vsock");
+    test_vsock_proxy.AddParameter("--server_vsock_id=",
+                                  instance_.vsock_guest_cid());
     test_vsock_proxy.AddParameter("--server_vsock_port=",
                                   config_.rootcanal_test_port());
     test_vsock_proxy.AddParameter("--client_type=tcp");
@@ -89,7 +87,7 @@ class RootCanal : public CommandSource {
 
     std::vector<MonitorCommand> commands;
     commands.emplace_back(
-        std::move(log_tee_.CreateLogTee(rootcanal, "rootcanal")));
+        CF_EXPECT(log_tee_.CreateLogTee(rootcanal, "rootcanal")));
     commands.emplace_back(std::move(rootcanal));
     commands.emplace_back(std::move(hci_vsock_proxy));
     commands.emplace_back(std::move(test_vsock_proxy));
@@ -104,7 +102,7 @@ class RootCanal : public CommandSource {
 
  private:
   std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
-  bool Setup() override { return true; }
+  Result<void> ResultSetup() override { return {}; }
 
   const CuttlefishConfig& config_;
   const CuttlefishConfig::InstanceSpecific& instance_;

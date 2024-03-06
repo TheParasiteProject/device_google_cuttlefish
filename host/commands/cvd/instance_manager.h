@@ -25,8 +25,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <fruit/fruit.h>
-
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/utils/json.h"
 #include "common/libs/utils/result.h"
@@ -56,7 +54,7 @@ class InstanceManager {
   template <typename T>
   using Set = selector::Set<T>;
 
-  INJECT(InstanceManager(InstanceLockFileManager&, HostToolTargetManager&));
+  InstanceManager(InstanceLockFileManager&, HostToolTargetManager&);
 
   // For cvd start
   Result<GroupCreationInfo> Analyze(const std::string& sub_cmd,
@@ -83,14 +81,9 @@ class InstanceManager {
   bool HasInstanceGroups(const uid_t uid);
   Result<void> SetInstanceGroup(const uid_t uid,
                                 const selector::GroupCreationInfo& group_info);
-  Result<void> SetBuildId(const uid_t uid, const std::string& group_name,
-                          const std::string& build_id);
   void RemoveInstanceGroup(const uid_t uid, const std::string&);
 
   cvd::Status CvdClear(const SharedFD& out, const SharedFD& err);
-  Result<cvd::Status> CvdFleet(const uid_t uid, const SharedFD& out,
-                               const SharedFD& err,
-                               const std::vector<std::string>& fleet_cmd_args);
   static Result<std::string> GetCuttlefishConfigPath(const std::string& home);
 
   Result<std::optional<InstanceLockFile>> TryAcquireLock(int instance_num);
@@ -110,16 +103,9 @@ class InstanceManager {
                                        const Queries& queries) const;
   Result<Json::Value> Serialize(const uid_t uid);
   Result<void> LoadFromJson(const uid_t uid, const Json::Value&);
+  std::vector<std::string> AllGroupNames(const uid_t uid) const;
 
  private:
-  Result<cvd::Status> CvdFleetImpl(const uid_t uid, const SharedFD& out,
-                                   const SharedFD& err);
-  struct StatusCommandOutput {
-    std::string stderr_msg;
-    Json::Value stdout_json;
-  };
-  Result<StatusCommandOutput> IssueStatusCommand(
-      const selector::LocalInstanceGroup& group, const SharedFD& err);
   Result<void> IssueStopCommand(const SharedFD& out, const SharedFD& err,
                                 const std::string& config_file_path,
                                 const selector::LocalInstanceGroup& group);

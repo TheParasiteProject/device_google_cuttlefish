@@ -16,20 +16,23 @@
 #pragma once
 
 #include <thread>
-#include "host/libs/config/cuttlefish_config.h"
 
 namespace cuttlefish {
 
 class MetricsHostReceiver {
  private:
-  const CuttlefishConfig& config_;
+  bool is_metrics_enabled_;
   std::thread thread_;
+  std::string metrics_queue_name_;
+
   void ServerLoop();
+  // Send different Clearcut events based on the received message
+  void ProcessMessage(const std::string& text);
 
  public:
-  MetricsHostReceiver(const cuttlefish::CuttlefishConfig& config);
+  MetricsHostReceiver(bool is_metrics_enabled);
   ~MetricsHostReceiver();
-  bool Initialize();
+  bool Initialize(const std::string& metrics_queue_name);
   void Join();
 };
 

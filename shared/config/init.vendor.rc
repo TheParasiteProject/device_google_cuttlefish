@@ -9,6 +9,8 @@ on early-init
     start vendor.dlkm_loader
     # specially load zram as it is a "leaf" GKI module
     exec u:r:modprobe:s0 -- /system/bin/modprobe -a -d /system/lib/modules zram.ko
+    # specially load memhealth as it is a "leaf" GKI module
+    exec u:r:modprobe:s0 -- /system/bin/modprobe -a -d /system/lib/modules memhealth.ko
 
 on init
     # ZRAM setup
@@ -40,7 +42,6 @@ on fs
 
     # Mount everything that does not require fsck
     mount_all --early
-    restorecon_recursive /vendor
 
     # So GceBootReporter can print to kmsg
     chmod 622 /dev/kmsg
@@ -82,6 +83,8 @@ on boot
 
 on property:sys.boot_completed=1
     trigger sys-boot-completed-set
+    mkdir /mnt/vendor/custom 0755 root root
+    mount ext2 /dev/block/by-name/custom /mnt/vendor/custom loop rw sync
 
 # We want one opportunity per boot to enable zram, so we
 # use a trigger we fire from the above stanza. If
@@ -104,24 +107,6 @@ service metrics_helper /vendor/bin/metrics_helper
 service socket_vsock_proxy /vendor/bin/socket_vsock_proxy -server_type=vsock -server_vsock_port=6520 -client_type=tcp -client_tcp_host=0.0.0.0 -client_tcp_port=5555
     user root
 
-service seriallogging /system/bin/logcat -b all -v threadtime -f /dev/hvc2 *:V
-    class main
-    user logd
-    group root logd
-
-service vsoc_input_service /vendor/bin/vsoc_input_service -touch_port=${ro.boot.vsock_touch_port} -keyboard_port=${ro.boot.vsock_keyboard_port}
-    group root uhid
-    user root
-    disabled
-
-on early-boot && property:ro.boot.vsock_touch_port=*
-   enable vsoc_input_service
-   start vsoc_input_service
-
-on early-boot && property:ro.boot.vsock_keyboard_port=*
-   enable vsoc_input_service
-   start vsoc_input_service
-
 service bugreport /system/bin/dumpstate -d -p -z
     class main
     user root
@@ -135,6 +120,9 @@ service suspend_blocker /vendor/bin/suspend_blocker
     group system
     user root
 
-on boot && property:ro.boot.enable_confirmationui=*
-   enable vendor.confirmationui_default
-   start vendor.confirmationui_default
+on early-init
+    setprop ro.setupwizard.mode ${ro.boot.setupwizard_mode}
+
+on early-init && property:ro.boot.enable_bootanimation=0
+    setprop debug.sf.nobootanimation 1
+

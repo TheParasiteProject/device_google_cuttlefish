@@ -18,61 +18,33 @@
 #include <unordered_set>
 #include <vector>
 
+#include "common/libs/utils/files.h"
+#include "common/libs/utils/result.h"
 #include "host/commands/run_cvd/launch/log_tee_creator.h"
 #include "host/libs/config/cuttlefish_config.h"
 #include "host/libs/config/known_paths.h"
 
 namespace cuttlefish {
-namespace {
 
-class Pica : public CommandSource {
- public:
-  INJECT(Pica(const CuttlefishConfig& config,
-                   const CuttlefishConfig::InstanceSpecific& instance,
-                   LogTeeCreator& log_tee))
-      : config_(config), instance_(instance), log_tee_(log_tee) {}
-
-  // CommandSource
-  Result<std::vector<MonitorCommand>> Commands() override {
-    if (!Enabled()) {
-      return {};
-    }
-    Command command(PicaBinary());
-
-    // UCI server port
-    command.AddParameter("--uci-port=", config_.pica_uci_port());
-
-
-    std::vector<MonitorCommand> commands;
-    commands.emplace_back(std::move(log_tee_.CreateLogTee(command, "pica")));
-    commands.emplace_back(std::move(command));
-    return commands;
+Result<std::vector<MonitorCommand>> Pica(
+    const CuttlefishConfig& config,
+    const CuttlefishConfig::InstanceSpecific& instance,
+    LogTeeCreator& log_tee) {
+  if (!instance.start_pica()) {
+    return {};
   }
+  auto pcap_dir = instance.PerInstanceLogPath("/pica/");
+  CF_EXPECT(EnsureDirectoryExists(pcap_dir),
+            "Pica pcap directory cannot be created.");
 
-  // SetupFeature
-  std::string Name() const override { return "Pica"; }
-  bool Enabled() const override {
-    return config_.enable_host_uwb_connector() && instance_.start_pica();
-  }
+  auto pica = Command(PicaBinary())
+                  .AddParameter("--uci-port=", config.pica_uci_port())
+                  .AddParameter("--pcapng-dir=", pcap_dir);
 
- private:
-  std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
-  bool Setup() override { return true; }
-
-  const CuttlefishConfig& config_;
-  const CuttlefishConfig::InstanceSpecific& instance_;
-  LogTeeCreator& log_tee_;
-};
-
-}  // namespace
-
-fruit::Component<
-    fruit::Required<const CuttlefishConfig,
-                    const CuttlefishConfig::InstanceSpecific, LogTeeCreator>>
-PicaComponent() {
-  return fruit::createComponent()
-      .addMultibinding<CommandSource, Pica>()
-      .addMultibinding<SetupFeature, Pica>();
+  std::vector<MonitorCommand> commands;
+  commands.emplace_back(CF_EXPECT(log_tee.CreateLogTee(pica, "pica")));
+  commands.emplace_back(std::move(pica));
+  return commands;
 }
 
 }  // namespace cuttlefish

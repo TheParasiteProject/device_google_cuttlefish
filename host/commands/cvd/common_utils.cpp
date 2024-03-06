@@ -16,12 +16,9 @@
 
 #include "host/commands/cvd/common_utils.h"
 
-#include <unistd.h>
-
-#include <algorithm>
 #include <memory>
+#include <mutex>
 #include <sstream>
-#include <stack>
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
@@ -85,58 +82,14 @@ cvd::Request MakeRequest(const MakeRequestForm& request_form,
   return request;
 }
 
-// given /a/b/c/d/e, ensures
-// all directories from /a through /a/b/c/d/e exist
-Result<void> EnsureDirectoryExistsAllTheWay(const std::string& dir) {
-  CF_EXPECT(!dir.empty() && dir.at(0) == '/',
-            "EnsureDirectoryExistsAllTheWay() handles absolute paths only.");
-  if (dir == "/") {
-    return {};
-  }
-  std::string path_exclude_root = dir.substr(1);
-  std::vector<std::string> tokens =
-      android::base::Tokenize(path_exclude_root, "/");
-  std::string current_dir = "/";
-  for (int i = 0; i < tokens.size(); i++) {
-    current_dir.append(tokens[i]);
-    CF_EXPECT(EnsureDirectoryExists(current_dir),
-              current_dir << " does not exist and cannot be created.");
-    current_dir.append("/");
-  }
-  return {};
-}
-
-static std::vector<std::string> Reverse(std::stack<std::string>& s) {
-  std::vector<std::string> reversed;
-  while (!s.empty()) {
-    reversed.push_back(s.top());
-    s.pop();
-  }
-  std::reverse(reversed.begin(), reversed.end());
-  return reversed;
-}
-
-static std::vector<std::string> EmulateAbsolutePathImpl(
-    std::stack<std::string>& so_far, const std::vector<std::string>& tokens,
-    const size_t idx = 0) {
-  if (idx == tokens.size()) {
-    return Reverse(so_far);
-  }
-  const std::string& token = tokens.at(idx);
-  if (token == "." || token.empty()) {
-    // If token is empty, it might be //, so should be simply ignored
-    return EmulateAbsolutePathImpl(so_far, tokens, idx + 1);
-  }
-  if (token == "..") {
-    if (!so_far.empty()) {
-      // at /, ls ../../.. shows just the root. So, if too many ..s are here,
-      // we silently ignore them
-      so_far.pop();
-    }
-    return EmulateAbsolutePathImpl(so_far, tokens, idx + 1);
-  }
-  so_far.push(token);
-  return EmulateAbsolutePathImpl(so_far, tokens, idx + 1);
+cvd::Response CommandResponse(const cvd::Status_Code code,
+                              const std::string message) {
+  cvd::Response response;
+  response.mutable_command_response();  // set oneof field
+  auto& status = *response.mutable_status();
+  status.set_code(code);
+  status.set_message(message);
+  return response;
 }
 
 template <typename T>
@@ -157,61 +110,57 @@ std::ostream& operator<<(std::ostream& out, const std::vector<T>& v) {
   return out;
 }
 
-Result<std::string> EmulateAbsolutePath(const InputPathForm& path_info) {
-  const auto& path = path_info.path_to_convert;
-  std::string working_dir;
-  if (path_info.current_working_dir) {
-    working_dir = *path_info.current_working_dir;
-  } else {
-    std::unique_ptr<char, void (*)(void*)> cwd(getcwd(nullptr, 0), &free);
-    std::string process_cwd(cwd.get());
-    working_dir = std::move(process_cwd);
-  }
-  CF_EXPECT(android::base::StartsWith(working_dir, '/'),
-            "Current working directory should be given in an absolute path.");
+Result<android::base::LogSeverity> EncodeVerbosity(
+    const std::string& verbosity) {
+  std::unordered_map<std::string, android::base::LogSeverity>
+      verbosity_encode_tab{
+          {"VERBOSE", android::base::VERBOSE},
+          {"DEBUG", android::base::DEBUG},
+          {"INFO", android::base::INFO},
+          {"WARNING", android::base::WARNING},
+          {"ERROR", android::base::ERROR},
+          {"FATAL_WITHOUT_ABORT", android::base::FATAL_WITHOUT_ABORT},
+          {"FATAL", android::base::FATAL},
+      };
+  CF_EXPECT(Contains(verbosity_encode_tab, verbosity),
+            "Verbosity \"" << verbosity << "\" is unrecognized.");
+  return verbosity_encode_tab.at(verbosity);
+}
 
-  const std::string home_dir = path_info.home_dir
-                                   ? *path_info.home_dir
-                                   : CF_EXPECT(SystemWideUserHome());
-  CF_EXPECT(android::base::StartsWith(home_dir, '/'),
-            "Home directory should be given in an absolute path.");
+Result<std::string> VerbosityToString(
+    const android::base::LogSeverity verbosity) {
+  std::unordered_map<android::base::LogSeverity, std::string>
+      verbosity_decode_tab{
+          {android::base::VERBOSE, "VERBOSE"},
+          {android::base::DEBUG, "DEBUG"},
+          {android::base::INFO, "INFO"},
+          {android::base::WARNING, "WARNING"},
+          {android::base::ERROR, "ERROR"},
+          {android::base::FATAL_WITHOUT_ABORT, "FATAL_WITHOUT_ABORT"},
+          {android::base::FATAL, "FATAL"},
+      };
+  CF_EXPECT(Contains(verbosity_decode_tab, verbosity),
+            "Verbosity \"" << verbosity << "\" is unrecognized.");
+  return verbosity_decode_tab.at(verbosity);
+}
 
-  if (path.empty()) {
-    LOG(ERROR) << "The requested path to convert an absolute path is empty.";
-    return "";
-  }
-  if (path == "/") {
-    return path;
-  }
-  std::vector<std::string> tokens = android::base::Tokenize(path, "/");
-  std::stack<std::string> prefix_dir_stack;
-  if (path == "~" || android::base::StartsWith(path, "~/")) {
-    // tokens == {"~", "some", "dir", "file"}
-    std::vector<std::string> home_dir_tokens =
-        android::base::Tokenize(home_dir, "/");
-    tokens.erase(tokens.begin());
-    for (const auto& home_dir_token : home_dir_tokens) {
-      prefix_dir_stack.push(home_dir_token);
-    }
-  } else if (!android::base::StartsWith(path, "/")) {
-    // path was like "a/b/c", which should be expanded to $PWD/a/b/c
-    std::vector<std::string> working_dir_tokens =
-        android::base::Tokenize(working_dir, "/");
-    for (const auto& working_dir_token : working_dir_tokens) {
-      prefix_dir_stack.push(working_dir_token);
-    }
-  }
+static std::mutex verbosity_mutex;
 
-  auto result = EmulateAbsolutePathImpl(prefix_dir_stack, tokens, 0);
-  std::stringstream assemble_output;
-  assemble_output << "/";
-  if (!result.empty()) {
-    assemble_output << android::base::Join(result, "/");
-  }
-  if (path_info.follow_symlink) {
-    return AbsolutePath(assemble_output.str());
-  }
-  return assemble_output.str();
+android::base::LogSeverity SetMinimumVerbosity(
+    const android::base::LogSeverity severity) {
+  std::lock_guard lock(verbosity_mutex);
+  return android::base::SetMinimumLogSeverity(severity);
+}
+
+Result<android::base::LogSeverity> SetMinimumVerbosity(
+    const std::string& severity) {
+  std::lock_guard lock(verbosity_mutex);
+  return SetMinimumVerbosity(CF_EXPECT(EncodeVerbosity(severity)));
+}
+
+android::base::LogSeverity GetMinimumVerbosity() {
+  std::lock_guard lock(verbosity_mutex);
+  return android::base::GetMinimumLogSeverity();
 }
 
 }  // namespace cuttlefish

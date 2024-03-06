@@ -13,7 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "credential_source.h"
+#include "host/libs/web/credential_source.h"
+
+#include <chrono>
 
 #include <android-base/logging.h>
 #include <android-base/strings.h>
@@ -23,16 +25,11 @@
 #include <openssl/pem.h>
 
 #include "common/libs/utils/base64.h"
+#include "common/libs/utils/result.h"
 
 namespace cuttlefish {
-namespace {
 
-std::chrono::steady_clock::duration REFRESH_WINDOW =
-    std::chrono::minutes(2);
-std::string REFRESH_URL = "http://metadata.google.internal/computeMetadata/"
-    "v1/instance/service-accounts/default/token";
-
-} // namespace
+static constexpr auto kRefreshWindow = std::chrono::minutes(2);
 
 GceMetadataCredentialSource::GceMetadataCredentialSource(
     HttpClient& http_client)
@@ -42,15 +39,18 @@ GceMetadataCredentialSource::GceMetadataCredentialSource(
 }
 
 Result<std::string> GceMetadataCredentialSource::Credential() {
-  if (expiration - std::chrono::steady_clock::now() < REFRESH_WINDOW) {
+  if (expiration - std::chrono::steady_clock::now() < kRefreshWindow) {
     CF_EXPECT(RefreshCredential());
   }
   return latest_credential;
 }
 
 Result<void> GceMetadataCredentialSource::RefreshCredential() {
+  static constexpr char kRefreshUrl[] =
+      "http://metadata.google.internal/computeMetadata/v1/instance/"
+      "service-accounts/default/token";
   auto response = CF_EXPECT(
-      http_client.DownloadToJson(REFRESH_URL, {"Metadata-Flavor: Google"}));
+      http_client.DownloadToJson(kRefreshUrl, {"Metadata-Flavor: Google"}));
   const auto& json = response.data;
   CF_EXPECT(response.HttpSuccess(),
             "Error fetching credentials. The server response was \""
@@ -69,7 +69,7 @@ Result<void> GceMetadataCredentialSource::RefreshCredential() {
   return {};
 }
 
-std::unique_ptr<CredentialSource> GceMetadataCredentialSource::make(
+std::unique_ptr<CredentialSource> GceMetadataCredentialSource::Make(
     HttpClient& http_client) {
   return std::unique_ptr<CredentialSource>(
       new GceMetadataCredentialSource(http_client));
@@ -81,7 +81,7 @@ FixedCredentialSource::FixedCredentialSource(const std::string& credential) {
 
 Result<std::string> FixedCredentialSource::Credential() { return credential; }
 
-std::unique_ptr<CredentialSource> FixedCredentialSource::make(
+std::unique_ptr<CredentialSource> FixedCredentialSource::Make(
     const std::string& credential) {
   return std::unique_ptr<CredentialSource>(new FixedCredentialSource(credential));
 }
@@ -132,7 +132,7 @@ RefreshCredentialSource::RefreshCredentialSource(
       refresh_token_(refresh_token) {}
 
 Result<std::string> RefreshCredentialSource::Credential() {
-  if (expiration_ - std::chrono::steady_clock::now() < REFRESH_WINDOW) {
+  if (expiration_ - std::chrono::steady_clock::now() < kRefreshWindow) {
     CF_EXPECT(UpdateLatestCredential());
   }
   return latest_credential_;
@@ -249,7 +249,7 @@ static Result<std::string> CreateJwt(const std::string& email,
   std::string jwt_to_sign = header_str + "." + claim_set_str;
 
   std::unique_ptr<EVP_MD_CTX, void (*)(EVP_MD_CTX*)> sign_ctx(
-      EVP_MD_CTX_create(), EVP_MD_CTX_free);
+      EVP_MD_CTX_new(), EVP_MD_CTX_free);
   CF_EXPECT(EVP_DigestSignInit(sign_ctx.get(), nullptr, EVP_sha256(), nullptr,
                                private_key));
   CF_EXPECT(EVP_DigestSignUpdate(sign_ctx.get(), jwt_to_sign.c_str(),
@@ -294,10 +294,10 @@ Result<void> ServiceAccountOauthCredentialSource::RefreshCredential() {
 }
 
 Result<std::string> ServiceAccountOauthCredentialSource::Credential() {
-  if (expiration_ - std::chrono::steady_clock::now() < REFRESH_WINDOW) {
+  if (expiration_ - std::chrono::steady_clock::now() < kRefreshWindow) {
     CF_EXPECT(RefreshCredential());
   }
   return latest_credential_;
 }
 
-} // namespace cuttlefish
+}  // namespace cuttlefish

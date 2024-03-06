@@ -18,63 +18,47 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "common/libs/utils/result.h"
+#include "host/libs/web/build_string.h"
 #include "host/libs/web/credential_source.h"
 #include "host/libs/web/http_client/http_client.h"
 
 namespace cuttlefish {
 
-class Artifact {
- public:
-  Artifact(const Json::Value&);
-  Artifact(std::string name) : name_(std::move(name)) {}
-
-  const std::string& Name() const { return name_; }
-  size_t Size() const { return size_; }
-  unsigned long LastModifiedTime() const { return last_modified_time_; }
-  const std::string& Md5() const { return md5_; }
-  const std::string& ContentType() const { return content_type_; }
-  const std::string& Revision() const { return revision_; }
-  unsigned long CreationTime() const { return creation_time_; }
-  unsigned int Crc32() const { return crc32_; }
-
- private:
-  std::string name_;
-  size_t size_;
-  unsigned long last_modified_time_;
-  std::string md5_;
-  std::string content_type_;
-  std::string revision_;
-  unsigned long creation_time_;
-  unsigned int crc32_;
-};
+inline constexpr char kAndroidBuildServiceUrl[] =
+    "https://www.googleapis.com/android/internal/build/v3";
 
 struct DeviceBuild {
-  DeviceBuild(std::string id, std::string target)
-      : id(std::move(id)), target(std::move(target)) {}
+  DeviceBuild(std::string id, std::string target,
+              std::optional<std::string> filepath);
 
   std::string id;
   std::string target;
   std::string product;
+  std::optional<std::string> filepath;
 };
 
 std::ostream& operator<<(std::ostream&, const DeviceBuild&);
 
 struct DirectoryBuild {
   // TODO(schuffelen): Support local builds other than "eng"
-  DirectoryBuild(std::vector<std::string> paths, std::string target);
+  DirectoryBuild(std::vector<std::string> paths, std::string target,
+                 std::optional<std::string> filepath);
 
   std::vector<std::string> paths;
   std::string target;
   std::string id;
   std::string product;
+  std::optional<std::string> filepath;
 };
 
 std::ostream& operator<<(std::ostream&, const DirectoryBuild&);
@@ -86,24 +70,28 @@ std::ostream& operator<<(std::ostream&, const Build&);
 class BuildApi {
  public:
   BuildApi();
-  BuildApi(std::unique_ptr<HttpClient>, std::unique_ptr<CredentialSource>);
-  BuildApi(std::unique_ptr<HttpClient>, std::unique_ptr<HttpClient>,
-           std::unique_ptr<CredentialSource>, std::string api_key,
-           const std::chrono::seconds retry_period);
+  BuildApi(BuildApi&&) = default;
+  BuildApi(std::unique_ptr<HttpClient> http_client,
+           std::unique_ptr<CredentialSource> credential_source,
+           std::string api_base_url);
+  BuildApi(std::unique_ptr<HttpClient> http_client,
+           std::unique_ptr<HttpClient> inner_http_client,
+           std::unique_ptr<CredentialSource> credential_source,
+           std::string api_key, const std::chrono::seconds retry_period,
+           std::string api_base_url);
   ~BuildApi() = default;
-
-  Result<std::string> LatestBuildId(const std::string& branch,
-                                    const std::string& target);
 
   // download the artifact from the build and apply the callback
   Result<void> ArtifactToCallback(const DeviceBuild& build,
                                   const std::string& artifact,
                                   HttpClient::DataCallback callback);
 
-  // determine the format of the build source argument and parse for the
-  // relevant build identifiers
-  Result<Build> ArgumentToBuild(const std::string& arg,
-                                const std::string& default_build_target);
+  Result<Build> GetBuild(const DeviceBuildString& build_string,
+                         const std::string& fallback_target);
+  Result<Build> GetBuild(const DirectoryBuildString& build_string,
+                         const std::string& fallback_target);
+  Result<Build> GetBuild(const BuildString& build_string,
+                         const std::string& fallback_target);
 
   Result<std::string> DownloadFile(const Build& build,
                                    const std::string& target_directory,
@@ -117,27 +105,23 @@ class BuildApi {
  private:
   Result<std::vector<std::string>> Headers();
 
+  Result<std::optional<std::string>> LatestBuildId(const std::string& branch,
+                                                   const std::string& target);
+
   Result<std::string> BuildStatus(const DeviceBuild&);
 
   Result<std::string> ProductName(const DeviceBuild&);
 
-  Result<std::vector<Artifact>> Artifacts(
+  Result<std::unordered_set<std::string>> Artifacts(
       const DeviceBuild& build,
       const std::vector<std::string>& artifact_filenames);
 
-  Result<std::vector<Artifact>> Artifacts(
+  Result<std::unordered_set<std::string>> Artifacts(
       const DirectoryBuild& build,
       const std::vector<std::string>& artifact_filenames);
 
-  Result<std::vector<Artifact>> Artifacts(
-      const Build& build, const std::vector<std::string>& artifact_filenames) {
-    auto res = std::visit(
-        [this, &artifact_filenames](auto&& arg) {
-          return Artifacts(arg, artifact_filenames);
-        },
-        build);
-    return CF_EXPECT(std::move(res));
-  }
+  Result<std::unordered_set<std::string>> Artifacts(
+      const Build& build, const std::vector<std::string>& artifact_filenames);
 
   Result<void> ArtifactToFile(const DeviceBuild& build,
                               const std::string& artifact,
@@ -148,15 +132,7 @@ class BuildApi {
                               const std::string& path);
 
   Result<void> ArtifactToFile(const Build& build, const std::string& artifact,
-                              const std::string& path) {
-    auto res = std::visit(
-        [this, &artifact, &path](auto&& arg) {
-          return ArtifactToFile(arg, artifact, path);
-        },
-        build);
-    CF_EXPECT(std::move(res));
-    return {};
-  }
+                              const std::string& path);
 
   Result<std::string> DownloadTargetFile(const Build& build,
                                          const std::string& target_directory,
@@ -167,8 +143,13 @@ class BuildApi {
   std::unique_ptr<CredentialSource> credential_source;
   std::string api_key_;
   std::chrono::seconds retry_period_;
+  std::string api_base_url_;
 };
 
 std::string GetBuildZipName(const Build& build, const std::string& name);
+
+std::tuple<std::string, std::string> GetBuildIdAndTarget(const Build& build);
+
+std::optional<std::string> GetFilepath(const Build& build);
 
 }  // namespace cuttlefish

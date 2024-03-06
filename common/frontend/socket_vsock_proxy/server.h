@@ -15,42 +15,49 @@
 
 #pragma once
 
+#include <chrono>
+
 #include "common/libs/fs/shared_fd.h"
+#include "common/libs/utils/result.h"
 
 namespace cuttlefish {
 namespace socket_proxy {
 
 class Server {
  public:
-  virtual SharedFD Start() = 0;
+  virtual Result<SharedFD> Start() = 0;
   virtual std::string Describe() const = 0;
   virtual ~Server() = default;
 };
 
 class TcpServer : public Server {
  public:
-  TcpServer(int port);
-  SharedFD Start() override;
+  TcpServer(int port, int retries_count = 1,
+            std::chrono::milliseconds retries_delay = std::chrono::milliseconds(0));
+  Result<SharedFD> Start() override;
   std::string Describe() const override;
 
  private:
   int port_;
+  int retries_count_;
+  std::chrono::milliseconds retries_delay_;
 };
 
 class VsockServer : public Server {
  public:
-  VsockServer(int port);
-  SharedFD Start() override;
+  VsockServer(int port, std::optional<int> vhost_user_vsock_cid);
+  Result<SharedFD> Start() override;
   std::string Describe() const override;
 
  private:
   int port_;
+  std::optional<int> vhost_user_vsock_cid_;
 };
 
 class DupServer : public Server {
  public:
   DupServer(int fd);
-  SharedFD Start() override;
+  Result<SharedFD> Start() override;
   std::string Describe() const override;
 
  private:

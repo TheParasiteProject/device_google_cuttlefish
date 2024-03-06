@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "common/libs/fs/shared_fd.h"
+#include "common/libs/utils/result.h"
 #include "common/libs/utils/subprocess.h"
 
 namespace cuttlefish {
@@ -27,7 +28,9 @@ class CrosvmBuilder {
  public:
   CrosvmBuilder();
 
-  void ApplyProcessRestarter(const std::string& crosvm_binary, int exit_code);
+  void ApplyProcessRestarter(const std::string& crosvm_binary,
+                             const std::string& first_time_argument,
+                             int exit_code);
   void AddControlSocket(const std::string&, const std::string&);
 
   void AddHvcSink();
@@ -44,10 +47,19 @@ class CrosvmBuilder {
   // [[deprecated("do not add any more users")]]
   void AddSerial(const std::string& output, const std::string& input);
 
+#ifdef __linux__
   SharedFD AddTap(const std::string& tap_name);
   SharedFD AddTap(const std::string& tap_name, const std::string& mac);
+#endif
 
   int HvcNum();
+
+  /**
+   * Configures the crosvm to start with --restore=<guest snapshot path>
+   */
+  Result<void> SetToRestoreFromSnapshot(const std::string& snapshot_dir_path,
+                                        const std::string& instance_id,
+                                        const std::string& snapshot_name);
 
   Command& Cmd();
 

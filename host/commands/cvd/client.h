@@ -30,6 +30,7 @@
 #include "common/libs/utils/result.h"
 #include "common/libs/utils/unix_sockets.h"
 #include "cvd_server.pb.h"
+#include "host/commands/cvd/server_constants.h"
 #include "host/commands/cvd/types.h"
 
 namespace cuttlefish {
@@ -42,9 +43,14 @@ struct OverrideFd {
 
 class CvdClient {
  public:
+  CvdClient(const android::base::LogSeverity verbosity,
+            const std::string& server_socket_path = ServerSocketPath());
   Result<void> ValidateServerVersion(const int num_retries = 1);
   Result<void> StopCvdServer(bool clear);
   Result<void> HandleAcloud(
+      const std::vector<std::string>& args,
+      const std::unordered_map<std::string, std::string>& env);
+  Result<void> HandleCvdCommand(
       const std::vector<std::string>& args,
       const std::unordered_map<std::string, std::string>& env);
   Result<cvd::Response> HandleCommand(
@@ -76,7 +82,13 @@ class CvdClient {
   Result<cvd::Version> GetServerVersion();
 
   Result<Json::Value> ListSubcommands(const cvd_common::Envs& envs);
+  Result<SharedFD> ConnectToServer();
   static cvd::Version GetClientVersion();
+
+  Result<void> RestartServer(const cvd::Version& server_version);
+
+  std::string server_socket_path_;
+  android::base::LogSeverity verbosity_;
 };
 
 }  // end of namespace cuttlefish

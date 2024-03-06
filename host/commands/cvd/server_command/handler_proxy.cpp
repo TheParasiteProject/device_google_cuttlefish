@@ -32,7 +32,7 @@ namespace cuttlefish {
 
 class CvdServerHandlerProxy : public CvdServerHandler {
  public:
-  INJECT(CvdServerHandlerProxy(CommandSequenceExecutor& executor))
+  CvdServerHandlerProxy(CommandSequenceExecutor& executor)
       : executor_(executor) {}
 
   Result<bool> CanHandle(const RequestWithStdio& request) const override {
@@ -62,7 +62,7 @@ class CvdServerHandlerProxy : public CvdServerHandler {
 
     auto subcmds = executor_.CmdList();
     auto selector_flag_collection =
-        selector::SelectorFlags::New().FlagsAsCollection();
+        CF_EXPECT(selector::SelectorFlags::New()).FlagsAsCollection();
 
     FrontlineParser::ParserParam server_param{
         .server_supported_subcmds = subcmds,
@@ -100,6 +100,7 @@ class CvdServerHandlerProxy : public CvdServerHandler {
     const auto responses =
         CF_EXPECT(executor_.Execute({std::move(forwarded_request)}, dev_null));
     CF_EXPECT_EQ(responses.size(), 1);
+    // TODO(moelsherif): check the response for failed command
     return responses.front();
   }
 
@@ -119,10 +120,9 @@ class CvdServerHandlerProxy : public CvdServerHandler {
   CommandSequenceExecutor& executor_;
 };
 
-fruit::Component<fruit::Required<CommandSequenceExecutor>>
-CvdHandlerProxyComponent() {
-  return fruit::createComponent()
-      .addMultibinding<CvdServerHandler, CvdServerHandlerProxy>();
+std::unique_ptr<CvdServerHandler> NewCvdServerHandlerProxy(
+    CommandSequenceExecutor& executor) {
+  return std::unique_ptr<CvdServerHandler>(new CvdServerHandlerProxy(executor));
 }
 
 }  // namespace cuttlefish

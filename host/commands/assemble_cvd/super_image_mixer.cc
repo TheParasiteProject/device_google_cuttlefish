@@ -13,14 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "super_image_mixer.h"
+#include "host/commands/assemble_cvd/super_image_mixer.h"
 
-#include <errno.h>
 #include <sys/stat.h>
 
 #include <algorithm>
-#include <cstdio>
-#include <functional>
+#include <array>
 #include <memory>
 
 #include <android-base/strings.h>
@@ -28,6 +26,7 @@
 
 #include "common/libs/fs/shared_buf.h"
 #include "common/libs/utils/archive.h"
+#include "common/libs/utils/contains.h"
 #include "common/libs/utils/files.h"
 #include "common/libs/utils/subprocess.h"
 #include "host/commands/assemble_cvd/misc_info.h"
@@ -36,7 +35,28 @@
 
 namespace cuttlefish {
 
-bool SuperImageNeedsRebuilding(const FetcherConfig& fetcher_config) {
+Result<bool> SuperImageNeedsRebuilding(const FetcherConfig& fetcher_config,
+                                       const std::string& default_target_zip,
+                                       const std::string& system_target_zip) {
+  bool has_default_target_zip = false;
+  bool has_system_target_zip = false;
+  if (default_target_zip != "" &&
+      default_target_zip != "unset") {
+    has_default_target_zip = true;
+  }
+  if (system_target_zip != "" &&
+      system_target_zip != "unset") {
+    has_system_target_zip = true;
+  }
+  CF_EXPECT(has_default_target_zip == has_system_target_zip,
+            "default_target_zip and system_target_zip "
+            "flags must be specified together");
+  // at this time, both should be the same, either true or false
+  // therefore, I only check one variable
+  if (has_default_target_zip) {
+    return true;
+  }
+
   bool has_default_build = false;
   bool has_system_build = false;
   for (const auto& file_iter : fetcher_config.get_cvd_files()) {
@@ -67,20 +87,24 @@ std::string TargetFilesZip(const FetcherConfig& fetcher_config,
   return "";
 }
 
-const std::string kMiscInfoPath = "META/misc_info.txt";
-const std::set<std::string> kDefaultTargetImages = {
-    "IMAGES/boot.img",        "IMAGES/init_boot.img",
-    "IMAGES/odm.img",         "IMAGES/odm_dlkm.img",
-    "IMAGES/recovery.img",    "IMAGES/userdata.img",
-    "IMAGES/vbmeta.img",      "IMAGES/vendor.img",
-    "IMAGES/vendor_dlkm.img", "IMAGES/vbmeta_vendor_dlkm.img",
+constexpr char kMiscInfoPath[] = "META/misc_info.txt";
+constexpr std::array kDefaultTargetImages = {
+    "IMAGES/boot.img",
+    "IMAGES/odm.img",
+    "IMAGES/odm_dlkm.img",
+    "IMAGES/recovery.img",
+    "IMAGES/userdata.img",
+    "IMAGES/vbmeta.img",
+    "IMAGES/vendor.img",
+    "IMAGES/vendor_dlkm.img",
+    "IMAGES/vbmeta_vendor_dlkm.img",
     "IMAGES/system_dlkm.img",
 };
-const std::set<std::string> kDefaultTargetBuildProp = {
-  "ODM/build.prop",
-  "ODM/etc/build.prop",
-  "VENDOR/build.prop",
-  "VENDOR/etc/build.prop",
+constexpr std::array kDefaultTargetBuildProp = {
+    "ODM/build.prop",
+    "ODM/etc/build.prop",
+    "VENDOR/build.prop",
+    "VENDOR/etc/build.prop",
 };
 
 void FindImports(Archive* archive, const std::string& build_prop_file) {
@@ -164,7 +188,7 @@ Result<void> CombineTargetZipFiles(const std::string& default_target_zip,
       continue;
     } else if (!android::base::EndsWith(name, ".img")) {
       continue;
-    } else if (kDefaultTargetImages.count(name) == 0) {
+    } else if (!Contains(kDefaultTargetImages, name)) {
       continue;
     }
     LOG(INFO) << "Writing " << name;
@@ -174,7 +198,7 @@ Result<void> CombineTargetZipFiles(const std::string& default_target_zip,
   for (const auto& name : default_target_contents) {
     if (!android::base::EndsWith(name, "build.prop")) {
       continue;
-    } else if (kDefaultTargetBuildProp.count(name) == 0) {
+    } else if (!Contains(kDefaultTargetBuildProp, name)) {
       continue;
     }
     FindImports(&default_target_archive, name);
@@ -188,7 +212,7 @@ Result<void> CombineTargetZipFiles(const std::string& default_target_zip,
       continue;
     } else if (!android::base::EndsWith(name, ".img")) {
       continue;
-    } else if (kDefaultTargetImages.count(name) > 0) {
+    } else if (Contains(kDefaultTargetImages, name)) {
       continue;
     }
     LOG(INFO) << "Writing " << name;
@@ -198,7 +222,7 @@ Result<void> CombineTargetZipFiles(const std::string& default_target_zip,
   for (const auto& name : system_target_contents) {
     if (!android::base::EndsWith(name, "build.prop")) {
       continue;
-    } else if (kDefaultTargetBuildProp.count(name) > 0) {
+    } else if (Contains(kDefaultTargetBuildProp, name)) {
       continue;
     }
     FindImports(&system_target_archive, name);
@@ -226,27 +250,34 @@ bool BuildSuperImage(const std::string& combined_target_zip,
     LOG(ERROR) << "Could not find otatools";
     return false;
   }
-  return execute({
-    build_super_image_binary,
-    "--path=" + otatools_path,
-    combined_target_zip,
-    output_path,
-  }) == 0;
+  return Execute({
+             build_super_image_binary,
+             "--path=" + otatools_path,
+             combined_target_zip,
+             output_path,
+         }) == 0;
 }
 
 Result<void> RebuildSuperImage(const FetcherConfig& fetcher_config,
                                const CuttlefishConfig& config,
                                const std::string& output_path) {
-  std::string default_target_zip =
-      TargetFilesZip(fetcher_config, FileSource::DEFAULT_BUILD);
-  CF_EXPECT(default_target_zip != "",
-            "Unable to find default target zip file.");
-
-  std::string system_target_zip =
-      TargetFilesZip(fetcher_config, FileSource::SYSTEM_BUILD);
-  CF_EXPECT(system_target_zip != "", "Unable to find system target zip file.");
-
   auto instance = config.ForDefaultInstance();
+  // In SuperImageNeedsRebuilding, it already checked both
+  // has_default_target_zip and has_system_target_zip are the same.
+  // Here, we only check if there is an input path
+  std::string default_target_zip = instance.default_target_zip();
+  std::string system_target_zip = instance.system_target_zip();
+  if (default_target_zip == "" || default_target_zip == "unset") {
+    default_target_zip =
+        TargetFilesZip(fetcher_config, FileSource::DEFAULT_BUILD);
+    CF_EXPECT(default_target_zip != "",
+              "Unable to find default target zip file.");
+
+    system_target_zip =
+        TargetFilesZip(fetcher_config, FileSource::SYSTEM_BUILD);
+    CF_EXPECT(system_target_zip != "", "Unable to find system target zip file.");
+  }
+
   // TODO(schuffelen): Use cuttlefish_assembly
   std::string combined_target_path = instance.PerInstanceInternalPath("target_combined");
   // TODO(schuffelen): Use otatools/bin/merge_target_files
@@ -272,7 +303,9 @@ class SuperImageRebuilderImpl : public SuperImageRebuilder {
  private:
   std::unordered_set<SetupFeature*> Dependencies() const override { return {}; }
   Result<void> ResultSetup() override {
-    if (SuperImageNeedsRebuilding(fetcher_config_)) {
+    if (CF_EXPECT(SuperImageNeedsRebuilding(fetcher_config_,
+                                            instance_.default_target_zip(),
+                                            instance_.system_target_zip()))) {
       CF_EXPECT(RebuildSuperImage(fetcher_config_, config_,
                                   instance_.new_super_image()));
     }

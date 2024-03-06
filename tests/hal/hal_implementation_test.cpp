@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <aidl/metadata.h>
 #include <android-base/logging.h>
 #include <android-base/properties.h>
@@ -24,19 +25,30 @@
 #include <hidl/metadata.h>
 #include <vintf/VintfObject.h>
 
+#include <algorithm>
+#include <cstddef>
+#include <map>
+#include <mutex>
+#include <set>
+#include <string>
+#include <vector>
+
+#ifdef AIDL_USE_UNFROZEN
+constexpr bool kAidlUseUnfrozen = true;
+#else
+constexpr bool kAidlUseUnfrozen = false;
+#endif
+
 using namespace android;
 
 // clang-format off
-static const std::set<std::string> kAutomotiveOnlyHidl = {
-    "android.hardware.automotive.evs@1.1",
-};
-
 static const std::set<std::string> kKnownMissingHidl = {
     "android.frameworks.automotive.display@1.0", // converted to AIDL, see b/170401743
     "android.frameworks.cameraservice.device@2.1",
     "android.frameworks.cameraservice.service@2.2", // converted to AIDL, see b/205764761
     "android.frameworks.displayservice@1.0", // deprecated, see b/141930622
     "android.frameworks.schedulerservice@1.0", // deprecated, see b/37226359
+    "android.frameworks.sensorservice@1.0", // deprecated, see b/205764765
     "android.frameworks.vr.composer@1.0",
     "android.frameworks.vr.composer@2.0",
     "android.frameworks.stats@1.0",  // converted to AIDL, see b/177667419
@@ -53,6 +65,7 @@ static const std::set<std::string> kKnownMissingHidl = {
     "android.hardware.automotive.audiocontrol@1.0",
     "android.hardware.automotive.audiocontrol@2.0",
     "android.hardware.automotive.can@1.0",  // converted to AIDL, see b/170405615
+    "android.hardware.automotive.evs@1.1",
     "android.hardware.automotive.sv@1.0",
     "android.hardware.automotive.vehicle@2.0",
     "android.hardware.biometrics.fingerprint@2.3", // converted to AIDL, see b/152416783
@@ -85,6 +98,7 @@ static const std::set<std::string> kKnownMissingHidl = {
     "android.hardware.graphics.composer@2.4", // converted to AIDL, see b/193240715
     "android.hardware.graphics.mapper@2.1",
     "android.hardware.graphics.mapper@3.0",
+    "android.hardware.graphics.mapper@4.0", // converted to Stable C, see b/205761028
     "android.hardware.health.storage@1.0", // converted to AIDL, see b/177470478
     "android.hardware.health@2.1", // converted to AIDL, see b/177269435
     "android.hardware.input.classifier@1.0", // converted to AIDL, see b/205761620
@@ -126,6 +140,7 @@ static const std::set<std::string> kKnownMissingHidl = {
     "android.hardware.wifi.supplicant@1.4", // Converted to AIDL (see b/196235436)
     "android.hidl.base@1.0",
     "android.hidl.memory.token@1.0",
+    "android.hidl.memory@1.0", // Deprecated (see b/205764958)
     "android.system.net.netd@1.1", // Converted to AIDL (see b/205764585)
     "android.system.suspend@1.0", // Converted to AIDL (see b/170260236)
     "android.system.wifi.keystore@1.0", // Converted to AIDL (see b/205764502)
@@ -152,6 +167,7 @@ static const std::set<std::string> kAutomotiveOnlyAidl = {
      */
     "android.automotive.watchdog",
     "android.frameworks.automotive.display",
+    "android.frameworks.automotive.powerpolicy",
     "android.frameworks.automotive.powerpolicy.internal",
     "android.frameworks.automotive.telemetry",
     "android.hardware.automotive.audiocontrol",
@@ -160,6 +176,8 @@ static const std::set<std::string> kAutomotiveOnlyAidl = {
     "android.hardware.automotive.occupant_awareness",
     "android.hardware.automotive.remoteaccess",
     "android.hardware.automotive.vehicle",
+    "android.hardware.automotive.ivn",
+    "android.hardware.macsec",
 };
 
 static const std::set<std::string> kTvOnlyAidl = {
@@ -180,6 +198,9 @@ static const std::set<std::string> kRadioOnlyAidl = {
     "android.hardware.radio.messaging", "android.hardware.radio.modem",
     "android.hardware.radio.network",   "android.hardware.radio.sap",
     "android.hardware.radio.sim",       "android.hardware.radio.voice",
+    "android.hardware.radio.ims",       "android.hardware.radio.ims.media",
+    "android.hardware.radio.satellite",
+
 };
 
 /*
@@ -203,6 +224,7 @@ static const std::set<std::string> kAlwaysMissingAidl = {
     "android.media.audio.common.types",
     "android.hardware.radio",
     "android.hardware.uwb.fira_android",
+    "android.hardware.wifi.common",
     "android.hardware.keymaster",
     "android.hardware.automotive.vehicle.property",
     // not on Cuttlefish since it's needed only on systems using HIDL audio HAL
@@ -238,16 +260,13 @@ static const std::vector<VersionedAidlPackage> kKnownMissingAidl = {
     {"android.hardware.identity.", 5, 266869317},
 
     {"android.se.omapi.", 1, 266870904},
-    {"android.hardware.secure_element.", 1, 123254068},
-    {"android.hardware.soundtrigger3.", 1, 266941225},
-    {"android.media.soundtrigger.", 1, 266941225},
+    {"android.hardware.soundtrigger3.", 2, 266941225},
+    {"android.media.soundtrigger.", 2, 266941225},
     {"android.hardware.weaver.", 2, 262418065},
 
     {"android.automotive.computepipe.registry.", 2, 273549907},
     {"android.automotive.computepipe.runner.", 2, 273549907},
-    {"android.frameworks.automotive.powerpolicy.", 2, 274160980},
     {"android.hardware.automotive.evs.", 2, 274162534},
-    {"android.hardware.automotive.ivn.", 1, 274139217},
 };
 
 // AOSP packages which are never considered
@@ -363,40 +382,6 @@ static DeviceType getDeviceType() {
   return DeviceType::PHONE;
 }
 
-static std::set<std::string> getMissingHidl() {
-  static std::once_flag unionFlag;
-  static std::set<std::string> missingHidl = kKnownMissingHidl;
-
-  std::call_once(unionFlag, [&]() {
-    const DeviceType type = getDeviceType();
-    switch (type) {
-      case DeviceType::AUTOMOTIVE:
-        LOG(INFO) << "Determined this is an Automotive device";
-        break;
-      case DeviceType::TV:
-        missingHidl.insert(kAutomotiveOnlyHidl.begin(),
-                           kAutomotiveOnlyHidl.end());
-        LOG(INFO) << "Determined this is a TV device";
-        break;
-      case DeviceType::WATCH:
-        missingHidl.insert(kAutomotiveOnlyHidl.begin(),
-                           kAutomotiveOnlyHidl.end());
-        LOG(INFO) << "Determined this is a Wear device";
-        break;
-      case DeviceType::PHONE:
-        missingHidl.insert(kAutomotiveOnlyHidl.begin(),
-                           kAutomotiveOnlyHidl.end());
-        LOG(INFO) << "Determined this is a Phone device";
-        break;
-      case DeviceType::UNKNOWN:
-        CHECK(false) << "getDeviceType return UNKNOWN type.";
-        break;
-    }
-  });
-
-  return missingHidl;
-}
-
 static bool isMissingAidl(const std::string& packageName) {
   static std::once_flag unionFlag;
   static std::set<std::string> missingAidl = kAlwaysMissingAidl;
@@ -448,6 +433,7 @@ static std::vector<VersionedAidlPackage> allAidlManifestInterfaces() {
 }
 
 TEST(Hal, AllHidlInterfacesAreInAosp) {
+  if (!kAidlUseUnfrozen) GTEST_SKIP() << "Not valid in 'next' configuration";
   for (const FQName& name : allHidlManifestInterfaces()) {
     EXPECT_TRUE(isAospHidlInterface(name))
         << "This device should only have AOSP interfaces, not: "
@@ -456,6 +442,7 @@ TEST(Hal, AllHidlInterfacesAreInAosp) {
 }
 
 TEST(Hal, HidlInterfacesImplemented) {
+  if (!kAidlUseUnfrozen) GTEST_SKIP() << "Not valid in 'next' configuration";
   // instances -> major version -> minor versions
   std::map<std::string, std::map<size_t, std::set<size_t>>> unimplemented;
 
@@ -470,7 +457,7 @@ TEST(Hal, HidlInterfacesImplemented) {
   // we'll be removing items from this which we know are missing
   // in order to be left with those elements which we thought we
   // knew were missing but are actually present
-  std::set<std::string> thoughtMissing = getMissingHidl();
+  std::set<std::string> thoughtMissing = kKnownMissingHidl;
 
   for (const FQName& f : allHidlManifestInterfaces()) {
     if (thoughtMissing.erase(f.getPackageAndVersion().string()) > 0) {
@@ -511,6 +498,7 @@ TEST(Hal, HidlInterfacesImplemented) {
 }
 
 TEST(Hal, AllAidlInterfacesAreInAosp) {
+  if (!kAidlUseUnfrozen) GTEST_SKIP() << "Not valid in 'next' configuration";
   for (const auto& package : allAidlManifestInterfaces()) {
     EXPECT_TRUE(isAospAidlInterface(package.name))
         << "This device should only have AOSP interfaces, not: "
@@ -524,6 +512,7 @@ struct AidlPackageCheck {
 };
 
 TEST(Hal, AidlInterfacesImplemented) {
+  if (!kAidlUseUnfrozen) GTEST_SKIP() << "Not valid in 'next' configuration";
   std::vector<VersionedAidlPackage> manifest = allAidlManifestInterfaces();
   std::vector<VersionedAidlPackage> thoughtMissing = kKnownMissingAidl;
 

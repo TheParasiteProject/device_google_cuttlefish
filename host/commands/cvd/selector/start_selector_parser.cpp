@@ -32,37 +32,8 @@
 #include "host/commands/cvd/selector/selector_constants.h"
 #include "host/commands/cvd/selector/selector_option_parser_utils.h"
 #include "host/commands/cvd/types.h"
-#include "host/libs/config/cuttlefish_config.h"
+#include "host/libs/config/config_constants.h"
 #include "host/libs/config/instance_nums.h"
-
-namespace std {
-
-/* For a needed CF_EXPECT_EQ(vector, vector, msg) below
- *
- * the result.h included above requires this operator. The declaration must come
- * before the header file if the operator<< is in cuttlefish namespace.
- * Otherwise, operator<< should be in std.
- *
- * The namespace resolution rule is to search cuttlefish, and then std if
- * failed.
- */
-static inline std::ostream& operator<<(std::ostream& out,
-                                       const std::vector<std::string>& v) {
-  if (v.empty()) {
-    out << "{}";
-    return out;
-  }
-  out << "{";
-  if (v.size() > 1) {
-    for (auto itr = v.cbegin(); itr != v.cend() - 1; itr++) {
-      out << *itr << ", ";
-    }
-  }
-  out << v.back() << "}";
-  return out;
-}
-
-}  // namespace std
 
 namespace cuttlefish {
 namespace selector {
@@ -123,19 +94,6 @@ std::optional<unsigned> TryFromCuttlefishInstance(
   }
   auto parsed = ParseNaturalNumber(cuttlefish_instance);
   return parsed.ok() ? std::optional(*parsed) : std::nullopt;
-}
-
-std::optional<unsigned> TryFromUser(const cvd_common::Envs& envs) {
-  if (!Contains(envs, "USER")) {
-    return std::nullopt;
-  }
-  std::string_view user{envs.at("USER")};
-  if (user.empty() || !android::base::ConsumePrefix(&user, kVsocUserPrefix)) {
-    return std::nullopt;
-  }
-  const auto& vsoc_num = user;
-  auto vsoc_id = ParseNaturalNumber(vsoc_num.data());
-  return vsoc_id.ok() ? std::optional(*vsoc_id) : std::nullopt;
 }
 
 }  // namespace
@@ -275,16 +233,8 @@ StartSelectorParser::HandleInstanceIds(
 }
 
 Result<bool> StartSelectorParser::CalcMayBeDefaultGroup() {
-  auto disable_default_group_flag = CF_EXPECT(
-      SelectorFlags::Get().GetFlag(SelectorFlags::kDisableDefaultGroup));
-  if (CF_EXPECT(
-          disable_default_group_flag.CalculateFlag<bool>(selector_args_))) {
-    return false;
-  }
   /*
-   * --disable_default_group instructs that the default group
-   * should be disabled anyway. If not given, the logic to determine
-   * whether this group is the default one or not is:
+   * the logic to determine whether this group is the default one or not:
    *  If HOME is not overridden and no selector options, then
    *   the default group
    *  Or, not a default group
@@ -365,84 +315,27 @@ Result<bool> StartSelectorParser::CalcAcquireFileLock() {
   return default_value;
 }
 
-Result<StartSelectorParser::WebrtcCalculatedNames>
-StartSelectorParser::CalcNamesUsingWebrtcDeviceId() {
-  std::optional<std::string> webrtc_device_ids_opt;
-  FilterSelectorFlag(cmd_args_, "webrtc_device_id", webrtc_device_ids_opt);
-  if (!webrtc_device_ids_opt) {
-    return WebrtcCalculatedNames{
-        .group_name = common_parser_.GroupName(),
-        .per_instance_names = common_parser_.PerInstanceNames()};
-  }
-  const std::string webrtc_device_ids =
-      std::move(webrtc_device_ids_opt.value());
-  std::vector<std::string> webrtc_device_names =
-      android::base::Tokenize(webrtc_device_ids, ",");
-
-  std::unordered_set<std::string> group_names;
-  std::vector<std::string> instance_names;
-  instance_names.reserve(webrtc_device_names.size());
-
-  // check if the supposedly group names exist and common across each
-  // webrtc_device_id
-  for (const auto& webrtc_device_name : webrtc_device_names) {
-    std::vector<std::string> tokens =
-        android::base::Tokenize(webrtc_device_name, "-");
-    CF_EXPECT_GE(tokens.size(), 2,
-                 webrtc_device_name
-                     << " cannot be split into group name and instance name");
-    group_names.insert(tokens.front());
-    CF_EXPECT_EQ(group_names.size(), 1,
-                 "group names in --webrtc_device_id must be the same but are "
-                 "different.");
-    tokens.erase(tokens.begin());
-    instance_names.push_back(android::base::Join(tokens, "-"));
-  }
-
-  std::string group_name = *(group_names.begin());
-  CF_EXPECT(IsValidGroupName(group_name),
-            group_name << " is not a valid group name");
-
-  for (const auto& instance_name : instance_names) {
-    CF_EXPECT(IsValidInstanceName(instance_name),
-              instance_name << " is not a valid instance name.");
-  }
-
-  if (auto flag_group_name_opt = common_parser_.GroupName()) {
-    CF_EXPECT_EQ(flag_group_name_opt.value(), group_name);
-  }
-  if (auto flag_per_instance_names_opt = common_parser_.PerInstanceNames()) {
-    CF_EXPECT_EQ(flag_per_instance_names_opt.value(), instance_names);
-  }
-  return WebrtcCalculatedNames{.group_name = group_name,
-                               .per_instance_names = instance_names};
-}
-
 Result<void> StartSelectorParser::ParseOptions() {
   may_be_default_group_ = CF_EXPECT(CalcMayBeDefaultGroup());
   must_acquire_file_lock_ = CF_EXPECT(CalcAcquireFileLock());
 
-  // compare webrtc_device_id against instance names
-  auto verified_names =
-      CF_EXPECT(CalcNamesUsingWebrtcDeviceId(),
-                "--webrtc_device_id must match the list of device names");
-  group_name_ = verified_names.group_name;
-  per_instance_names_ = verified_names.per_instance_names;
+  group_name_ = common_parser_.GroupName();
+  per_instance_names_ = common_parser_.PerInstanceNames();
 
   std::optional<std::string> num_instances;
   std::optional<std::string> instance_nums;
   std::optional<std::string> base_instance_num;
   // set num_instances as std::nullptr or the value of --num_instances
-  FilterSelectorFlag(cmd_args_, "num_instances", num_instances);
-  FilterSelectorFlag(cmd_args_, "instance_nums", instance_nums);
-  FilterSelectorFlag(cmd_args_, "base_instance_num", base_instance_num);
+  CF_EXPECT(FilterSelectorFlag(cmd_args_, "num_instances", num_instances));
+  CF_EXPECT(FilterSelectorFlag(cmd_args_, "instance_nums", instance_nums));
+  CF_EXPECT(
+      FilterSelectorFlag(cmd_args_, "base_instance_num", base_instance_num));
 
   InstanceIdsParams instance_nums_param{
       .num_instances = std::move(num_instances),
       .instance_nums = std::move(instance_nums),
       .base_instance_num = std::move(base_instance_num),
-      .cuttlefish_instance_env = TryFromCuttlefishInstance(envs_),
-      .vsoc_suffix = TryFromUser(envs_)};
+      .cuttlefish_instance_env = TryFromCuttlefishInstance(envs_)};
   auto parsed_ids = CF_EXPECT(HandleInstanceIds(instance_nums_param));
   requested_num_instances_ = parsed_ids.GetNumOfInstances();
   instance_ids_ = std::move(parsed_ids.GetInstanceIds());

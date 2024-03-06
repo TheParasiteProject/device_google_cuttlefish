@@ -16,13 +16,14 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>
 
 #include <android-base/logging.h>
 #include <gflags/gflags.h>
 
 #include "common/libs/fs/shared_fd.h"
 #include "common/libs/utils/result.h"
-#include "host/commands/run_cvd/runner_defs.h"
+#include "host/libs/command_util/runner/defs.h"
 #include "host/libs/command_util/util.h"
 #include "host/libs/config/cuttlefish_config.h"
 
@@ -76,9 +77,9 @@ int main(int argc, char** argv) {
   google::ParseCommandLineFlags(&argc, &argv, true);
 
   cuttlefish::Result<void> result = cuttlefish::RestartCvdMain();
+
   if (!result.ok()) {
-    LOG(ERROR) << result.error().Message();
-    LOG(DEBUG) << result.error().Trace();
+    LOG(ERROR) << result.error().FormatForEnv();
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;

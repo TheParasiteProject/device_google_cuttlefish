@@ -43,7 +43,7 @@ ModemSimulator::~ModemSimulator() {
 void ModemSimulator::LoadNvramConfig() {
   auto nvram_config = NvramConfig::Get();
   if (!nvram_config) {
-    LOG(FATAL) << "Failed to obtain nvram config singleton";
+    LOG(ERROR) << "Failed to obtain nvram config singleton";
     return;
   }
 }
@@ -113,7 +113,7 @@ void ModemSimulator::DispatchCommand(const Client& client, std::string& command)
     }
   }
 
-  if (!success && client.type != Client::REMOTE) {
+  if (!success && client.Type() != Client::REMOTE) {
     LOG(DEBUG) << "Not supported AT command: " << command;
     client.SendCommandResponse(ModemService::kCmeErrorOperationNotSupported);
   }

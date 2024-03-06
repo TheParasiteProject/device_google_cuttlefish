@@ -26,6 +26,8 @@ KERNEL_MODULES_PATH ?= \
     kernel/prebuilts/common-modules/virtual-device/$(TARGET_KERNEL_USE)/$(subst _,-,$(TARGET_KERNEL_ARCH))
 PRODUCT_COPY_FILES += $(TARGET_KERNEL_PATH):kernel
 
+BOARD_KERNEL_VERSION := $(word 1,$(subst vermagic=,,$(shell egrep -h -ao -m 1 'vermagic=.*' $(KERNEL_MODULES_PATH)/nd_virtio.ko)))
+
 # The list of modules strictly/only required either to reach second stage
 # init, OR for recovery. Do not use this list to workaround second stage
 # issues.
@@ -43,6 +45,12 @@ RAMDISK_KERNEL_MODULES := \
     virtio-rng.ko \
     vmw_vsock_virtio_transport.ko \
 
+ifeq ($(TARGET_KERNEL_ARCH),arm64)
+BOARD_KERNEL_PATH_16K := kernel/prebuilts/mainline/$(TARGET_KERNEL_ARCH)/16k/kernel-mainline
+BOARD_KERNEL_MODULES_16K += $(wildcard kernel/prebuilts/mainline/$(TARGET_KERNEL_ARCH)/16k/*.ko)
+BOARD_KERNEL_MODULES_16K += $(wildcard kernel/prebuilts/common-modules/virtual-device/mainline/$(TARGET_KERNEL_ARCH)/16k/*.ko)
+endif
+
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES := \
     $(patsubst %,$(KERNEL_MODULES_PATH)/%,$(RAMDISK_KERNEL_MODULES))
 
@@ -50,7 +58,24 @@ BOARD_VENDOR_RAMDISK_KERNEL_MODULES := \
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(KERNEL_MODULES_PATH)/virtio_pci_legacy_dev.ko)
 # GKI >5.10 will have and require virtio_pci_modern_dev.ko
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(KERNEL_MODULES_PATH)/virtio_pci_modern_dev.ko)
+# GKI >6.4 will have an required vmw_vsock_virtio_transport_common.ko and vsock.ko
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += \
+	$(wildcard $(KERNEL_MODULES_PATH)/vmw_vsock_virtio_transport_common.ko) \
+	$(wildcard $(KERNEL_MODULES_PATH)/vsock.ko)
 
+
+# TODO(b/176860479) once virt_wifi is deprecated we can stop loading mac80211 in
+# first stage init. To minimize scope of modules options to first stage init,
+# mac80211_hwsim.radios=0 has to be specified in the modules options file (which we
+# only read in first stage) and mac80211_hwsim has to be loaded in first stage consequently..
+ifneq ($(TARGET_KERNEL_ARCH),riscv64)
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(SYSTEM_DLKM_SRC)/libarc4.ko)
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(SYSTEM_DLKM_SRC)/rfkill.ko)
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(KERNEL_MODULES_PATH)/cfg80211.ko)
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(KERNEL_MODULES_PATH)/mac80211.ko)
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(wildcard $(KERNEL_MODULES_PATH)/mac80211_hwsim.ko)
+BOARD_DO_NOT_STRIP_VENDOR_RAMDISK_MODULES := true
+endif
 ALL_KERNEL_MODULES := $(wildcard $(KERNEL_MODULES_PATH)/*.ko)
 BOARD_VENDOR_KERNEL_MODULES := \
     $(filter-out $(BOARD_VENDOR_RAMDISK_KERNEL_MODULES),\
@@ -145,12 +170,18 @@ BOARD_AVB_INIT_BOOT_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)
 BOARD_AVB_INIT_BOOT_ROLLBACK_INDEX_LOCATION := 3
 
 # Enabled chained vbmeta for vendor_dlkm
-BOARD_AVB_VBMETA_CUSTOM_PARTITIONS := vendor_dlkm
+BOARD_AVB_VBMETA_CUSTOM_PARTITIONS := vendor_dlkm system_dlkm
 BOARD_AVB_VBMETA_VENDOR_DLKM := vendor_dlkm
 BOARD_AVB_VBMETA_VENDOR_DLKM_KEY_PATH := external/avb/test/data/testkey_rsa4096.pem
 BOARD_AVB_VBMETA_VENDOR_DLKM_ALGORITHM := SHA256_RSA4096
 BOARD_AVB_VBMETA_VENDOR_DLKM_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)
 BOARD_AVB_VBMETA_VENDOR_DLKM_ROLLBACK_INDEX_LOCATION := 4
+
+BOARD_AVB_VBMETA_SYSTEM_DLKM := system_dlkm
+BOARD_AVB_VBMETA_SYSTEM_DLKM_KEY_PATH := external/avb/test/data/testkey_rsa4096.pem
+BOARD_AVB_VBMETA_SYSTEM_DLKM_ALGORITHM := SHA256_RSA4096
+BOARD_AVB_VBMETA_SYSTEM_DLKM_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)
+BOARD_AVB_VBMETA_SYSTEM_DLKM_ROLLBACK_INDEX_LOCATION := 5
 
 
 # Using sha256 for dm-verity partitions. b/178983355
@@ -190,10 +221,16 @@ TARGET_USERIMAGES_SPARSE_EROFS_DISABLED ?= false
 TARGET_USERIMAGES_SPARSE_EXT_DISABLED ?= false
 TARGET_USERIMAGES_SPARSE_F2FS_DISABLED ?= false
 
-# Make the userdata partition 6G to accommodate ASAN and CTS
+# Make the userdata partition 8G to accommodate ASAN, CTS and provide
+# enough space for other cases (such as remount, etc)
 BOARD_USERDATAIMAGE_PARTITION_SIZE := $(TARGET_USERDATAIMAGE_PARTITION_SIZE)
 BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := $(TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE)
+ifeq ($(TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE),f2fs)
 TARGET_USERIMAGES_USE_F2FS := true
+endif
+ifeq ($(TARGET_USERDATAIMAGE_FILE_SYSTEM_TYPE),ext4)
+TARGET_USERIMAGES_USE_EXT4 := true
+endif
 
 # Enable goldfish's encoder.
 # TODO(b/113617962) Remove this if we decide to use
@@ -228,6 +265,7 @@ WIFI_DRIVER_FW_PATH_AP      := "/dev/null"
 
 # vendor sepolicy
 BOARD_VENDOR_SEPOLICY_DIRS += device/google/cuttlefish/shared/sepolicy/vendor
+BOARD_VENDOR_SEPOLICY_DIRS += device/google/cuttlefish/shared/sepolicy/vendor/seriallogging
 BOARD_VENDOR_SEPOLICY_DIRS += device/google/cuttlefish/shared/sepolicy/vendor/google
 
 BOARD_SEPOLICY_DIRS += system/bt/vendor_libs/linux/sepolicy
@@ -265,7 +303,7 @@ BOARD_SUPER_IMAGE_IN_UPDATE_PACKAGE := true
 TARGET_RELEASETOOLS_EXTENSIONS := device/google/cuttlefish/shared
 
 # Generate a partial ota update package for partitions in vbmeta_system
-BOARD_PARTIAL_OTA_UPDATE_PARTITIONS_LIST := product system system_ext vbmeta_system
+BOARD_PARTIAL_OTA_UPDATE_PARTITIONS_LIST := $(BOARD_AVB_VBMETA_SYSTEM) vbmeta_system init_boot
 
 BOARD_BOOTLOADER_IN_UPDATE_PACKAGE := true
 BOARD_RAMDISK_USE_LZ4 := true
@@ -322,9 +360,6 @@ PRODUCT_COPY_FILES += \
     device/google/cuttlefish/dtb.img:dtb.img \
     device/google/cuttlefish/required_images:required_images \
 
-# Cuttlefish doesn't support ramdump feature yet, exclude the ramdump debug tool.
-EXCLUDE_BUILD_RAMDUMP_UPLOADER_DEBUG_TOOL := true
-
 # GKI-related variables.
 BOARD_USES_GENERIC_KERNEL_IMAGE := true
 ifdef TARGET_DEDICATED_RECOVERY
@@ -335,8 +370,6 @@ endif
 BOARD_MOVE_GSI_AVB_KEYS_TO_VENDOR_BOOT := true
 
 BOARD_GENERIC_RAMDISK_KERNEL_MODULES_LOAD := dm-user.ko
-
-BOARD_HAVE_BLUETOOTH := true
 
 # Enable the new fingerprint format on cuttlefish
 BOARD_USE_VBMETA_DIGTEST_IN_FINGERPRINT := true
@@ -350,6 +383,9 @@ AB_OTA_PARTITIONS += vendor_dlkm
 ifneq ($(BOARD_AVB_VBMETA_VENDOR_DLKM),)
 AB_OTA_PARTITIONS += vbmeta_vendor_dlkm
 endif
+endif
+ifneq ($(BOARD_AVB_VBMETA_SYSTEM_DLKM),)
+AB_OTA_PARTITIONS += vbmeta_system_dlkm
 endif
 
 ifneq ($(PRODUCT_BUILD_BOOT_IMAGE), false)

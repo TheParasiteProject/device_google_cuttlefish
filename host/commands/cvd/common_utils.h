@@ -23,6 +23,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <android-base/logging.h>
+
 #include "common/libs/utils/result.h"
 #include "cvd_server.pb.h"
 #include "host/commands/cvd/types.h"
@@ -50,6 +52,9 @@ cvd::Request MakeRequest(const MakeRequestForm& request_form,
 
 cvd::Request MakeRequest(const MakeRequestForm& request_form);
 
+cvd::Response CommandResponse(const cvd::Status_Code,
+                              const std::string message = "");
+
 // name of environment variable to mark the launch_cvd initiated by the cvd
 // server
 static constexpr char kCvdMarkEnv[] = "_STARTED_BY_CVD_SERVER_";
@@ -75,34 +80,18 @@ std::string ConcatToString(Args&&... args) {
   return ConcatToStream(concatenator, std::forward<Args>(args)...).str();
 }
 
-// given /a/b/c/d/e, ensures
-// all directories from /a through /a/b/c/d/e exist
-Result<void> EnsureDirectoryExistsAllTheWay(const std::string& dir);
+constexpr android::base::LogSeverity kCvdDefaultVerbosity = android::base::INFO;
 
-struct InputPathForm {
-  /** If nullopt, uses the process' current working dir
-   *  But if there is no preceding .. or ., this field is not used.
-   */
-  std::optional<std::string> current_working_dir;
-  /** If nullopt, use SystemWideUserHome()
-   *  But, if there's no preceding ~, this field is not used.
-   */
-  std::optional<std::string> home_dir;
-  std::string path_to_convert;
-  bool follow_symlink;
-};
+Result<android::base::LogSeverity> EncodeVerbosity(
+    const std::string& verbosity);
 
-/**
- * Returns emulated absolute path with a different process'/thread's
- * context.
- *
- * This is useful when daemon(0, 0)-started server process wants to
- * figure out a relative path that came from its client.
- *
- * The call mostly succeeds. It fails only if:
- *  home_dir isn't given so supposed to relies on the local SystemWideUserHome()
- *  but SystemWideUserHome() call fails.
- */
-Result<std::string> EmulateAbsolutePath(const InputPathForm& path_info);
+Result<std::string> VerbosityToString(
+    const android::base::LogSeverity verbosity);
+
+android::base::LogSeverity SetMinimumVerbosity(
+    const android::base::LogSeverity);
+Result<android::base::LogSeverity> SetMinimumVerbosity(const std::string&);
+
+android::base::LogSeverity GetMinimumVerbosity();
 
 }  // namespace cuttlefish

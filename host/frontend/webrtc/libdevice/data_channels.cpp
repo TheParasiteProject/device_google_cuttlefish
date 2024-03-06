@@ -65,6 +65,8 @@ static constexpr auto kInputChannelLabel = "input-channel";
 static constexpr auto kAdbChannelLabel = "adb-channel";
 static constexpr auto kBluetoothChannelLabel = "bluetooth-channel";
 static constexpr auto kCameraDataChannelLabel = "camera-data-channel";
+static constexpr auto kSensorsDataChannelLabel = "sensors-channel";
+static constexpr auto kLightsChannelLabel = "lights-channel";
 static constexpr auto kLocationDataChannelLabel = "location-channel";
 static constexpr auto kKmlLocationsDataChannelLabel = "kml-locations-channel";
 static constexpr auto kGpxLocationsDataChannelLabel = "gpx-locations-channel";
@@ -89,7 +91,7 @@ class InputChannelHandler : public DataChannelHandler {
     std::unique_ptr<Json::CharReader> json_reader(builder.newCharReader());
     std::string errorMessage;
     auto str = msg.data.cdata<char>();
-    if (!json_reader->parse(str, str + size, &evt, &errorMessage) < 0) {
+    if (!json_reader->parse(str, str + size, &evt, &errorMessage)) {
       LOG(ERROR) << "Received invalid JSON object over input channel: "
                  << errorMessage;
       return;
@@ -108,10 +110,10 @@ class InputChannelHandler : public DataChannelHandler {
                               {"y", Json::ValueType::intValue},
                               {"display_label", Json::ValueType::stringValue}});
       if (!result.ok()) {
-        LOG(ERROR) << result.error().Trace();
+        LOG(ERROR) << result.error().FormatForEnv();
         return;
       }
-      auto label = evt["display_label"].asString();
+      auto label = evt["device_label"].asString();
       int32_t down = evt["down"].asInt();
       int32_t x = evt["x"].asInt();
       int32_t y = evt["y"].asInt();
@@ -124,14 +126,13 @@ class InputChannelHandler : public DataChannelHandler {
                               {"down", Json::ValueType::intValue},
                               {"x", Json::ValueType::arrayValue},
                               {"y", Json::ValueType::arrayValue},
-                              {"slot", Json::ValueType::arrayValue},
-                              {"display_label", Json::ValueType::stringValue}});
+                              {"device_label", Json::ValueType::stringValue}});
       if (!result.ok()) {
-        LOG(ERROR) << result.error().Trace();
+        LOG(ERROR) << result.error().FormatForEnv();
         return;
       }
 
-      auto label = evt["display_label"].asString();
+      auto label = evt["device_label"].asString();
       auto idArr = evt["id"];
       int32_t down = evt["down"].asInt();
       auto xArr = evt["x"];
@@ -147,12 +148,22 @@ class InputChannelHandler : public DataChannelHandler {
                              {{"event_type", Json::ValueType::stringValue},
                               {"keycode", Json::ValueType::stringValue}});
       if (!result.ok()) {
-        LOG(ERROR) << result.error().Trace();
+        LOG(ERROR) << result.error().FormatForEnv();
         return;
       }
       auto down = evt["event_type"].asString() == std::string("keydown");
       auto code = DomKeyCodeToLinux(evt["keycode"].asString());
       observer()->OnKeyboardEvent(code, down);
+    } else if (event_type == "wheel") {
+       auto result =
+          ValidateJsonObject(evt, "wheel",
+                             {{"pixels", Json::ValueType::intValue}});
+       if (!result.ok()) {
+        LOG(ERROR) << result.error().FormatForEnv();
+        return;
+       }
+       auto pixels = evt["pixels"].asInt();
+       observer()->OnWheelEvent(pixels);
     } else {
       LOG(ERROR) << "Unrecognized event type: " << event_type;
       return;
@@ -191,7 +202,7 @@ class ControlChannelHandler : public DataChannelHandler {
             {"hinge_angle_value", Json::ValueType::intValue},
         });
     if (!result.ok()) {
-      LOG(ERROR) << result.error().Trace();
+      LOG(ERROR) << result.error().FormatForEnv();
       return;
     }
     auto command = evt["command"].asString();
@@ -206,6 +217,9 @@ class ControlChannelHandler : public DataChannelHandler {
       return;
     } else if (command.rfind("camera_", 0) == 0) {
       observer()->OnCameraControlMsg(evt);
+      return;
+    } else if (command == "display") {
+      observer()->OnDisplayControlMsg(evt);
       return;
     }
 
@@ -274,6 +288,43 @@ class CameraChannelHandler : public DataChannelHandler {
 
  private:
   std::vector<char> receive_buffer_;
+};
+
+// TODO(b/297361564)
+class SensorsChannelHandler : public DataChannelHandler {
+ public:
+  void OnFirstMessage() override { observer()->OnSensorsChannelOpen(GetBinarySender()); }
+  void OnMessageInner(const webrtc::DataBuffer &msg) override {
+    if (!first_msg_received_) {
+      first_msg_received_ = true;
+      return;
+    }
+    observer()->OnSensorsMessage(msg.data.cdata(), msg.size());
+  }
+
+  void OnStateChangeInner(webrtc::DataChannelInterface::DataState state) override {
+    if (state == webrtc::DataChannelInterface::kClosed) {
+      observer()->OnSensorsChannelClosed();
+    }
+  }
+
+ private:
+  bool first_msg_received_ = false;
+};
+
+class LightsChannelHandler : public DataChannelHandler {
+ public:
+  // We do not expect any messages from the frontend.
+  void OnMessageInner(const webrtc::DataBuffer &msg) override {}
+
+  void OnStateChangeInner(
+      webrtc::DataChannelInterface::DataState state) override {
+    if (state == webrtc::DataChannelInterface::kOpen) {
+      observer()->OnLightsChannelOpen(GetJSONSender());
+    } else if (state == webrtc::DataChannelInterface::kClosed) {
+      observer()->OnLightsChannelClosed();
+    }
+  }
 };
 
 class LocationChannelHandler : public DataChannelHandler {
@@ -404,6 +455,9 @@ void DataChannelHandlers::OnDataChannelOpen(
   } else if (label == kCameraDataChannelLabel) {
     camera_.reset(
         new DataChannelHandlerImpl<CameraChannelHandler>(channel, observer_));
+  } else if (label == kLightsChannelLabel) {
+    lights_.reset(
+        new DataChannelHandlerImpl<LightsChannelHandler>(channel, observer_));
   } else if (label == kLocationDataChannelLabel) {
     location_.reset(
         new DataChannelHandlerImpl<LocationChannelHandler>(channel, observer_));
@@ -412,6 +466,9 @@ void DataChannelHandlers::OnDataChannelOpen(
         channel, observer_));
   } else if (label == kGpxLocationsDataChannelLabel) {
     gpx_location_.reset(new DataChannelHandlerImpl<GpxLocationChannelHandler>(
+        channel, observer_));
+  } else if (label == kSensorsDataChannelLabel) {
+    sensors_.reset(new DataChannelHandlerImpl<SensorsChannelHandler>(
         channel, observer_));
   } else {
     unknown_channels_.emplace_back(

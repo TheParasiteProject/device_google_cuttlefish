@@ -29,6 +29,10 @@
 namespace cuttlefish {
 namespace vm_manager {
 
+// Class for tagging that the CommandSource is a dependency command for the
+// VmManager.
+class VmmDependencyCommand : public virtual StatusCheckCommandSource {};
+
 // Superclass of every guest VM manager.
 class VmManager {
  public:
@@ -54,7 +58,11 @@ class VmManager {
   // - /dev/hvc9 = uwb
   // - /dev/hvc10 = oemlock
   // - /dev/hvc11 = keymint
-  static const int kDefaultNumHvcs = 12;
+  // - /dev/hvc12 = NFC
+  // - /dev/hvc13 = sensors
+  // - /dev/hvc14 = MCU control
+  // - /dev/hvc15 = MCU UART
+  static const int kDefaultNumHvcs = 16;
 
   // This is the number of virtual disks (block devices) that should be
   // configured by the VmManager. Related to the description above regarding
@@ -80,14 +88,15 @@ class VmManager {
   ConfigureGraphics(const CuttlefishConfig::InstanceSpecific& instance) = 0;
 
   virtual Result<std::unordered_map<std::string, std::string>>
-  ConfigureBootDevices(int num_disks, bool have_gpu) = 0;
+  ConfigureBootDevices(const CuttlefishConfig::InstanceSpecific& instance) = 0;
 
   // Starts the VMM. It will usually build a command and pass it to the
   // command_starter function, although it may start more than one. The
   // command_starter function allows to customize the way vmm commands are
   // started/tracked/etc.
   virtual Result<std::vector<MonitorCommand>> StartCommands(
-      const CuttlefishConfig& config) = 0;
+      const CuttlefishConfig& config,
+      std::vector<VmmDependencyCommand*>& dependencyCommands) = 0;
 };
 
 fruit::Component<fruit::Required<const CuttlefishConfig,

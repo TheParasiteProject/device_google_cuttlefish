@@ -75,7 +75,7 @@ class ReadEvalPrintLoop {
   ReadEvalPrintLoop(GceApi& gce, BuildApi& build, int in_fd, int out_fd,
                     bool internal_addresses)
       : gce_(gce),
-        build_(build),
+        build_api_(build),
         in_(in_fd),
         out_(out_fd),
         internal_addresses_(internal_addresses) {}
@@ -128,10 +128,11 @@ class ReadEvalPrintLoop {
       }
       if (!handler_result.ok()) {
         test_gce_driver::TestMessage error_msg;
-        error_msg.mutable_error()->set_text(handler_result.error().Trace());
+        error_msg.mutable_error()->set_text(
+            handler_result.error().FormatForEnv());
         CF_EXPECT(SerializeDelimitedToFileDescriptor(error_msg, out_),
                   "Failure while writing error message: (\n"
-                      << handler_result.error().Trace() << "\n)");
+                      << handler_result.error().FormatForEnv() << "\n)");
       }
       test_gce_driver::TestMessage stream_end_msg;
       stream_end_msg.mutable_stream_end();  // Set this in the oneof
@@ -244,7 +245,7 @@ class ReadEvalPrintLoop {
         auto ssh = callback_state.instance->Ssh();
         if (!ssh.ok()) {
           callback_state.result = CF_ERR("ssh command failed\n"
-                                         << ssh.error().Trace());
+                                         << ssh.error().FormatForEnv());
           return false;
         }
 
@@ -267,13 +268,14 @@ class ReadEvalPrintLoop {
       return true;
     };
 
-    DeviceBuild build(request.build().id(), request.build().target());
+    DeviceBuild build(request.build().id(), request.build().target(),
+                      std::nullopt);
     CF_EXPECT(
-        build_.ArtifactToCallback(build, request.artifact_name(), callback),
+        build_api_.ArtifactToCallback(build, request.artifact_name(), callback),
         "Failed to send file: (\n"
             << (callback_state.result.ok()
                     ? "Unknown failure"
-                    : callback_state.result.error().Trace() + "\n)"));
+                    : callback_state.result.error().FormatForEnv() + "\n)"));
 
     callback_state.ssh_in->Close();
 
@@ -352,7 +354,7 @@ class ReadEvalPrintLoop {
   }
 
   GceApi& gce_;
-  BuildApi& build_;
+  BuildApi& build_api_;
   google::protobuf::io::FileInputStream in_;
   int out_;
   bool internal_addresses_;
@@ -389,13 +391,12 @@ Result<void> TestGceDriverMain(int argc, char** argv) {
 
   GceApi gce(*curl, gce_creds, cloud_project);
 
-  static constexpr char BUILD_SCOPE[] =
-      "https://www.googleapis.com/auth/androidbuild.internal";
   auto build_creds = std::make_unique<ServiceAccountOauthCredentialSource>(
       CF_EXPECT(ServiceAccountOauthCredentialSource::FromJson(
-          *curl, service_json, BUILD_SCOPE)));
+          *curl, service_json, kBuildScope)));
 
-  BuildApi build(std::move(curl), std::move(build_creds));
+  BuildApi build(std::move(curl), std::move(build_creds),
+                 kAndroidBuildServiceUrl);
 
   ReadEvalPrintLoop executor(gce, build, STDIN_FILENO, STDOUT_FILENO,
                              internal_addresses);
@@ -412,6 +413,5 @@ int main(int argc, char** argv) {
   if (res.ok()) {
     return 0;
   }
-  LOG(ERROR) << "cvd_test_gce_driver failed: " << res.error().Message();
-  LOG(DEBUG) << "cvd_test_gce_driver failed: " << res.error().Trace();
+  LOG(ERROR) << "cvd_test_gce_driver failed: " << res.error().FormatForEnv();
 }

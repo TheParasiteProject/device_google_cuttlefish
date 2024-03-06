@@ -19,7 +19,6 @@ package {
 
 cc_binary {
     name: "cvd_internal_stop",
-    symlinks: ["stop_cvd"],
     srcs: [
         "main.cc",
     ],
@@ -34,6 +33,13 @@ cc_binary {
         "libcuttlefish_command_util",
         "libcuttlefish_host_config",
         "libgflags",
+        "libcuttlefish_msg_queue",
+        "libcuttlefish_metrics",
     ],
-    defaults: ["cuttlefish_host", "cuttlefish_libicuuc"],
+    target: {
+        darwin: {
+            enabled: true,
+        },
+    },
+    defaults: ["cuttlefish_host"],
 }

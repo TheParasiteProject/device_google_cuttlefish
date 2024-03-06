@@ -17,6 +17,15 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
+rust_protobuf {
+    name: "libkmr_proto_rust",
+    crate_name: "kmr_proto",
+    protos: ["storage.proto"],
+    source_stem: "kmr_proto",
+    host_supported: true,
+    use_protobuf3: true,
+}
+
 rust_library_host {
     name: "libkmr_cf",
     srcs: [ "lib.rs" ],
@@ -25,10 +34,13 @@ rust_library_host {
         "libhex",
         "libkmr_common",
         "libkmr_crypto_boring",
+        "libkmr_proto_rust",
         "libkmr_ta",
         "libkmr_wire",
         "liblibc",
         "liblog_rust",
+        "libnix",
+        "libprotobuf",
         "libsecure_env_tpm",
     ],
     defaults: ["cuttlefish_buildhost_only"],
@@ -55,11 +67,14 @@ rust_test_host {
         "libhex",
         "libkmr_common",
         "libkmr_crypto_boring",
+        "libkmr_proto_rust",
         "libkmr_ta",
         "libkmr_tests",
         "libkmr_wire",
         "liblibc",
         "liblog_rust",
+        "libnix",
+        "libprotobuf",
         "libsecure_env_tpm",
     ],
     defaults: ["cuttlefish_buildhost_only"],

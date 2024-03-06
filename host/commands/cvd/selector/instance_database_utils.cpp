@@ -26,7 +26,7 @@
 #include <android-base/strings.h>
 
 #include "common/libs/utils/files.h"
-#include "host/libs/config/cuttlefish_config.h"
+#include "host/libs/config/config_constants.h"
 
 namespace cuttlefish {
 namespace selector {
@@ -61,7 +61,7 @@ bool IsValidGroupName(const std::string& token) {
 
 bool IsValidInstanceName(const std::string& token) {
   if (token.empty()) {
-    return false;
+    return true;
   }
   std::regex base_regular_expr("[A-Za-z_0-9]+");
   auto pieces = android::base::Split(token, "-");

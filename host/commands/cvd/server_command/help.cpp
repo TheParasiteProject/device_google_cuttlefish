@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "host/commands/cvd/server.h"
+#include "host/commands/cvd/server_command/help.h"
 
 #include <mutex>
 
 #include "common/libs/fs/shared_buf.h"
 #include "host/commands/cvd/command_sequence.h"
+#include "host/commands/cvd/server.h"
 #include "host/commands/cvd/server_command/utils.h"
 #include "host/commands/cvd/types.h"
-#include "host/libs/config/inject.h"
 
 namespace cuttlefish {
 
@@ -39,11 +39,9 @@ Selector Options:
                          instance group. The 'names' is comma-separated.
 
 Driver Options:
-  --help                 Print this message
-  -disable_default_group If the flag is true, the group's runtime files are
-                         not populated under the user's HOME. Instead the
-                         files are created under an automatically-generated
-                         directory. (default: false)
+  -help                  Print this message
+  -verbosity=<LEVEL>     Adjust Cvd verbosity level. LEVEL is Android log
+                         severity. (Required: cvd >= v1.3)
   -acquire_file_lock     If the flag is given, the cvd server attempts to
                          acquire the instance lock file lock. (default: true)
 
@@ -61,6 +59,8 @@ Commands:
   restart                Restart the device without reinitializing the disks
   restart-server         Restart the cvd_server background process.
   status                 Check and print the state of a running instance.
+  env                    Control the environment of running instances like wifi
+                         or geolocation.
   host_bugreport         Capture a host bugreport, including configs, logs, and
                          tombstones.
 
@@ -70,12 +70,14 @@ Args:
 
 Experimental:
   reset                  See cvd reset --help. Requires cvd >= v1.2
+  snapshot_take          cvd snapshot_take --help. Requires crosvm, cvd >= v1.4
+  suspend                cvd suspend --help. Requires crosvm, cvd >= v1.4
+  resume                 cvd resume --help. Requires crosvm, cvd >= v1.4
 )";
 
 class CvdHelpHandler : public CvdServerHandler {
  public:
-  INJECT(CvdHelpHandler(CommandSequenceExecutor& executor))
-      : executor_(executor) {}
+  CvdHelpHandler(CommandSequenceExecutor& executor) : executor_(executor) {}
 
   Result<bool> CanHandle(const RequestWithStdio& request) const override {
     auto invocation = ParseInvocation(request.Message());
@@ -114,7 +116,8 @@ class CvdHelpHandler : public CvdServerHandler {
                                request.Credentials());
 
     interrupt_lock.unlock();
-    executor_.Execute({inner_cmd}, SharedFD::Open("/dev/null", O_RDWR));
+    CF_EXPECT(
+        executor_.Execute({inner_cmd}, SharedFD::Open("/dev/null", O_RDWR)));
 
     return response;
   }
@@ -158,9 +161,9 @@ cvd::Request CvdHelpHandler::HelpSubcommandToFlag(
   return modified_proto;
 }
 
-fruit::Component<fruit::Required<CommandSequenceExecutor>> CvdHelpComponent() {
-  return fruit::createComponent()
-      .addMultibinding<CvdServerHandler, CvdHelpHandler>();
+std::unique_ptr<CvdServerHandler> NewCvdHelpHandler(
+    CommandSequenceExecutor& executor) {
+  return std::unique_ptr<CvdServerHandler>(new CvdHelpHandler(executor));
 }
 
 }  // namespace cuttlefish

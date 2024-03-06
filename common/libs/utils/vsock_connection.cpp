@@ -40,13 +40,20 @@ namespace cuttlefish {
 
 VsockConnection::~VsockConnection() { Disconnect(); }
 
-std::future<bool> VsockConnection::ConnectAsync(unsigned int port,
-                                                unsigned int cid) {
+std::future<bool> VsockConnection::ConnectAsync(
+    unsigned int port, unsigned int cid,
+    std::optional<int> vhost_user_vsock_cid_) {
   return std::async(std::launch::async,
-                    [this, port, cid]() { return Connect(port, cid); });
+                    [this, port, cid, vhost_user_vsock_cid_]() {
+                      return Connect(port, cid, vhost_user_vsock_cid_);
+                    });
 }
 
 void VsockConnection::Disconnect() {
+  // We need to serialize all accesses to the SharedFD.
+  std::lock_guard<std::recursive_mutex> read_lock(read_mutex_);
+  std::lock_guard<std::recursive_mutex> write_lock(write_mutex_);
+
   LOG(INFO) << "Disconnecting with fd status:" << fd_->StrError();
   fd_->Shutdown(SHUT_RDWR);
   if (disconnect_callback_) {
@@ -59,10 +66,21 @@ void VsockConnection::SetDisconnectCallback(std::function<void()> callback) {
   disconnect_callback_ = callback;
 }
 
-bool VsockConnection::IsConnected() const { return fd_->IsOpen(); }
+bool VsockConnection::IsConnected() {
+  // We need to serialize all accesses to the SharedFD.
+  std::lock_guard<std::recursive_mutex> read_lock(read_mutex_);
+  std::lock_guard<std::recursive_mutex> write_lock(write_mutex_);
 
-bool VsockConnection::DataAvailable() const {
+  return fd_->IsOpen();
+}
+
+bool VsockConnection::DataAvailable() {
   SharedFDSet read_set;
+
+  // We need to serialize all accesses to the SharedFD.
+  std::lock_guard<std::recursive_mutex> read_lock(read_mutex_);
+  std::lock_guard<std::recursive_mutex> write_lock(write_mutex_);
+
   read_set.Set(fd_);
   struct timeval timeout = {0, 0};
   return Select(&read_set, nullptr, nullptr, &timeout) > 0;
@@ -191,8 +209,10 @@ bool VsockConnection::WriteStrides(const char* data, unsigned int size,
   return true;
 }
 
-bool VsockClientConnection::Connect(unsigned int port, unsigned int cid) {
-  fd_ = SharedFD::VsockClient(cid, port, SOCK_STREAM);
+bool VsockClientConnection::Connect(unsigned int port, unsigned int cid,
+                                    std::optional<int> vhost_user) {
+  fd_ =
+      SharedFD::VsockClient(cid, port, SOCK_STREAM, vhost_user ? true : false);
   if (!fd_->IsOpen()) {
     LOG(ERROR) << "Failed to connect:" << fd_->StrError();
   }
@@ -210,9 +230,11 @@ void VsockServerConnection::ServerShutdown() {
   }
 }
 
-bool VsockServerConnection::Connect(unsigned int port, unsigned int cid) {
+bool VsockServerConnection::Connect(unsigned int port, unsigned int cid,
+                                    std::optional<int> vhost_user_vsock_cid) {
   if (!server_fd_->IsOpen()) {
-    server_fd_ = cuttlefish::SharedFD::VsockServer(port, SOCK_STREAM, cid);
+    server_fd_ = cuttlefish::SharedFD::VsockServer(port, SOCK_STREAM,
+                                                   vhost_user_vsock_cid, cid);
   }
   if (server_fd_->IsOpen()) {
     fd_ = SharedFD::Accept(*server_fd_);

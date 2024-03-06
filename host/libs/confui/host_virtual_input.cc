@@ -22,26 +22,106 @@ namespace cuttlefish {
 namespace confui {
 
 HostVirtualInput::HostVirtualInput(HostServer& host_server,
-                                   HostModeCtrl& host_mode_ctrl)
-    : host_server_(host_server), host_mode_ctrl_(host_mode_ctrl) {}
-
-void HostVirtualInput::TouchEvent(const int x, const int y,
-                                  const bool is_down) {
-  std::string mode("Android Mode");
-  if (IsConfUiActive()) {
-    mode = std::string("Confirmation UI Mode");
-  }
-  if (is_down) {
-    ConfUiLog(INFO) << "TouchEvent occurs in " << mode << " at [" << x << ", "
-                    << y << "]";
-  }
-  host_server_.TouchEvent(x, y, is_down);
-}
+                                   HostModeCtrl& host_mode_ctrl,
+                                   InputConnector& android_mode_input)
+    : host_server_(host_server),
+      host_mode_ctrl_(host_mode_ctrl),
+      android_mode_input_(android_mode_input) {}
 
 void HostVirtualInput::UserAbortEvent() { host_server_.UserAbortEvent(); }
 
 bool HostVirtualInput::IsConfUiActive() {
   return host_mode_ctrl_.IsConfirmatioUiMode();
+}
+
+class HostVirtualInputEventSink : public InputConnector::EventSink {
+ public:
+  HostVirtualInputEventSink(std::unique_ptr<EventSink> android_mode_input,
+                            HostVirtualInput& host_virtual_input)
+      : android_mode_input_(std::move(android_mode_input)),
+        host_virtual_input_(host_virtual_input) {}
+
+  // EventSink implementation
+  Result<void> SendTouchEvent(const std::string& device_label, int x, int y,
+                              bool down) override;
+  Result<void> SendMultiTouchEvent(const std::string& device_label,
+                                   const std::vector<MultitouchSlot>& slots,
+                                   bool down) override;
+  Result<void> SendKeyboardEvent(uint16_t code, bool down) override;
+  Result<void> SendRotaryEvent(int pixels) override;
+  Result<void> SendSwitchesEvent(uint16_t code, bool state) override;
+
+ private:
+  std::unique_ptr<EventSink> android_mode_input_;
+  HostVirtualInput& host_virtual_input_;
+};
+
+Result<void> HostVirtualInputEventSink::SendTouchEvent(
+    const std::string& device_label, int x, int y, bool down) {
+  if (!host_virtual_input_.IsConfUiActive()) {
+    return android_mode_input_->SendTouchEvent(device_label, x, y, down);
+  }
+
+  if (down) {
+    ConfUiLog(INFO) << "TouchEvent occurs in Confirmation UI Mode at [" << x
+                    << ", " << y << "]";
+    host_virtual_input_.host_server().TouchEvent(x, y, down);
+  }
+  return {};
+}
+
+Result<void> HostVirtualInputEventSink::SendMultiTouchEvent(
+    const std::string& device_label, const std::vector<MultitouchSlot>& slots,
+    bool down) {
+  if (!host_virtual_input_.IsConfUiActive()) {
+    CF_EXPECT(
+        android_mode_input_->SendMultiTouchEvent(device_label, slots, down));
+    return {};
+  }
+  for (auto& slot : slots) {
+    if (down) {
+      auto this_x = slot.x;
+      auto this_y = slot.y;
+      ConfUiLog(INFO) << "TouchEvent occurs in Confirmation UI Mode at ["
+                      << this_x << ", " << this_y << "]";
+      host_virtual_input_.host_server().TouchEvent(this_x, this_y, down);
+    }
+  }
+  return {};
+}
+
+Result<void> HostVirtualInputEventSink::SendKeyboardEvent(uint16_t code,
+                                                          bool down) {
+  if (!host_virtual_input_.IsConfUiActive()) {
+    CF_EXPECT(android_mode_input_->SendKeyboardEvent(code, down));
+    return {};
+  }
+  ConfUiLog(VERBOSE) << "keyboard event ignored in confirmation UI mode";
+  return {};
+}
+
+Result<void> HostVirtualInputEventSink::SendRotaryEvent(int pixels) {
+  if (!host_virtual_input_.IsConfUiActive()) {
+    CF_EXPECT(android_mode_input_->SendRotaryEvent(pixels));
+    return {};
+  }
+  ConfUiLog(VERBOSE) << "rotary event ignored in confirmation UI mode";
+  return {};
+}
+
+Result<void> HostVirtualInputEventSink::SendSwitchesEvent(uint16_t code,
+                                                          bool state) {
+  if (!host_virtual_input_.IsConfUiActive()) {
+    CF_EXPECT(android_mode_input_->SendSwitchesEvent(code, state));
+    return {};
+  }
+  ConfUiLog(VERBOSE) << "switches event ignored in confirmation UI mode";
+  return {};
+}
+
+std::unique_ptr<InputConnector::EventSink> HostVirtualInput::CreateSink() {
+  return std::unique_ptr<EventSink>(
+      new HostVirtualInputEventSink(android_mode_input_.CreateSink(), *this));
 }
 
 }  // namespace confui

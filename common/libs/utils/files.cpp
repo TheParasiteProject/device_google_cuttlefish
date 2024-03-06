@@ -15,24 +15,28 @@
  */
 
 #include "common/libs/utils/files.h"
-#include "common/libs/utils/contains.h"
-#include "common/libs/utils/inotify.h"
+
+#ifdef __linux__
+#include <linux/fiemap.h>
+#include <linux/fs.h>
+#include <sys/inotify.h>
+#include <sys/sendfile.h>
+#endif
 
 #include <dirent.h>
 #include <fcntl.h>
 #include <ftw.h>
 #include <libgen.h>
-#include <linux/fiemap.h>
-#include <linux/fs.h>
 #include <sched.h>
-#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
-#include <sys/sendfile.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -45,20 +49,29 @@
 #include <iosfwd>
 #include <istream>
 #include <memory>
+#include <numeric>
 #include <ostream>
 #include <ratio>
 #include <string>
 #include <vector>
 
+#include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/macros.h>
+#include <android-base/strings.h>
+#include <android-base/unique_fd.h>
 
-#include "android-base/strings.h"
 #include "common/libs/fs/shared_fd.h"
+#include "common/libs/utils/contains.h"
+#include "common/libs/utils/inotify.h"
 #include "common/libs/utils/result.h"
-#include "common/libs/utils/scope_guard.h"
 #include "common/libs/utils/subprocess.h"
 #include "common/libs/utils/users.h"
+
+#ifdef __APPLE__
+#define off64_t off_t
+#define ftruncate64 ftruncate
+#endif
 
 namespace cuttlefish {
 
@@ -74,7 +87,7 @@ bool FileHasContent(const std::string& path) {
 Result<std::vector<std::string>> DirectoryContents(const std::string& path) {
   std::vector<std::string> ret;
   std::unique_ptr<DIR, int(*)(DIR*)> dir(opendir(path.c_str()), closedir);
-  CF_EXPECT(dir != nullptr, "Could not read from dir \"" << path << "\"");
+  CF_EXPECTF(dir != nullptr, "Could not read from dir \"{}\"", path);
   struct dirent* ent{};
   while ((ent = readdir(dir.get()))) {
     ret.emplace_back(ent->d_name);
@@ -96,16 +109,17 @@ bool DirectoryExists(const std::string& path, bool follow_symlinks) {
 Result<void> EnsureDirectoryExists(const std::string& directory_path,
                                    const mode_t mode,
                                    const std::string& group_name) {
-  if (DirectoryExists(directory_path)) {
+  if (DirectoryExists(directory_path, /* follow_symlinks */ true)) {
     return {};
   }
-  const auto parent_dir = cpp_dirname(directory_path);
+  const auto parent_dir = android::base::Dirname(directory_path);
   if (parent_dir.size() > 1) {
     EnsureDirectoryExists(parent_dir, mode, group_name);
   }
-  LOG(DEBUG) << "Setting up " << directory_path;
+  LOG(VERBOSE) << "Setting up " << directory_path;
   if (mkdir(directory_path.c_str(), mode) < 0 && errno != EEXIST) {
-    return CF_ERRNO("Failed to create directory: \"" << directory_path << "\"");
+    return CF_ERRNO("Failed to create directory: \"" << directory_path << "\""
+                                                     << strerror(errno));
   }
 
   if (group_name != "") {
@@ -194,12 +208,21 @@ namespace {
 
 bool SendFile(int out_fd, int in_fd, off64_t* offset, size_t count) {
   while (count > 0) {
+#ifdef __linux__
     const auto bytes_written =
         TEMP_FAILURE_RETRY(sendfile(out_fd, in_fd, offset, count));
     if (bytes_written <= 0) {
       return false;
     }
-
+#elif defined(__APPLE__)
+    off_t bytes_written = count;
+    auto success = TEMP_FAILURE_RETRY(
+        sendfile(in_fd, out_fd, *offset, &bytes_written, nullptr, 0));
+    *offset += bytes_written;
+    if (success < 0 || bytes_written == 0) {
+      return false;
+    }
+#endif
     count -= bytes_written;
   }
   return true;
@@ -305,7 +328,13 @@ std::chrono::system_clock::time_point FileModificationTime(const std::string& pa
   if (stat(path.c_str(), &st) == -1) {
     return std::chrono::system_clock::time_point();
   }
+#ifdef __linux__
   std::chrono::seconds seconds(st.st_mtim.tv_sec);
+#elif defined(__APPLE__)
+  std::chrono::seconds seconds(st.st_mtimespec.tv_sec);
+#else
+#error "Unsupported operating system"
+#endif
   return std::chrono::system_clock::time_point(seconds);
 }
 
@@ -344,14 +373,13 @@ std::string ReadFile(const std::string& file) {
 }
 
 std::string CurrentDirectory() {
-  char* path = getcwd(nullptr, 0);
-  if (path == nullptr) {
+  std::unique_ptr<char, void (*)(void*)> cwd(getcwd(nullptr, 0), &free);
+  std::string process_cwd(cwd.get());
+  if (!cwd) {
     PLOG(ERROR) << "`getcwd(nullptr, 0)` failed";
     return "";
   }
-  std::string ret(path);
-  free(path);
-  return ret;
+  return process_cwd;
 }
 
 FileSizes SparseFileSizes(const std::string& path) {
@@ -409,10 +437,7 @@ std::string cpp_basename(const std::string& str) {
 }
 
 std::string cpp_dirname(const std::string& str) {
-  char* copy = strdup(str.c_str()); // dirname may modify its argument
-  std::string ret(dirname(copy));
-  free(copy);
-  return ret;
+  return android::base::Dirname(str);
 }
 
 bool FileIsSocket(const std::string& path) {
@@ -436,6 +461,24 @@ int GetDiskUsage(const std::string& path) {
   CHECK_GT(bytes_read, 0) << "Failed to read from pipe " << strerror(errno);
   std::move(subprocess).Wait();
   return atoi(text_output.data()) * 1024;
+}
+
+/**
+ * Find an image file through the input path and pattern.
+ *
+ * If it finds the file, return the path string.
+ * If it can't find the file, return empty string.
+ */
+std::string FindImage(const std::string& search_path,
+                      const std::vector<std::string>& pattern) {
+  const std::string& search_path_extend = search_path + "/";
+  for (const auto& name : pattern) {
+    std::string image = search_path_extend + name;
+    if (FileExists(image)) {
+      return image;
+    }
+  }
+  return "";
 }
 
 std::string FindFile(const std::string& path, const std::string& target_name) {
@@ -470,6 +513,7 @@ Result<void> WalkDirectory(
   return {};
 }
 
+#ifdef __linux__
 class InotifyWatcher {
  public:
   InotifyWatcher(int inotify, const std::string& path, int watch_mode)
@@ -552,11 +596,9 @@ static Result<void> WaitForFileInternal(const std::string& path, int timeoutSec,
 
 auto WaitForFile(const std::string& path, int timeoutSec)
     -> decltype(WaitForFileInternal(path, timeoutSec, 0)) {
-  auto inotify = inotify_init1(IN_CLOEXEC);
+  android::base::unique_fd inotify(inotify_init1(IN_CLOEXEC));
 
-  ScopeGuard close_inotify([inotify]() { close(inotify); });
-
-  CF_EXPECT(WaitForFileInternal(path, timeoutSec, inotify));
+  CF_EXPECT(WaitForFileInternal(path, timeoutSec, inotify.get()));
 
   return {};
 }
@@ -590,6 +632,85 @@ Result<void> WaitForUnixSocket(const std::string& path, int timeoutSec) {
   }
 
   return CF_ERR("This shouldn't be executed");
+}
+#endif
+
+namespace {
+
+std::vector<std::string> FoldPath(std::vector<std::string> elements,
+                                  std::string token) {
+  static constexpr std::array kIgnored = {".", "..", ""};
+  if (token == ".." && !elements.empty()) {
+    elements.pop_back();
+  } else if (!Contains(kIgnored, token)) {
+    elements.emplace_back(token);
+  }
+  return elements;
+}
+
+Result<std::vector<std::string>> CalculatePrefix(
+    const InputPathForm& path_info) {
+  const auto& path = path_info.path_to_convert;
+  std::string working_dir;
+  if (path_info.current_working_dir) {
+    working_dir = *path_info.current_working_dir;
+  } else {
+    working_dir = CurrentDirectory();
+  }
+  std::vector<std::string> prefix;
+  if (path == "~" || android::base::StartsWith(path, "~/")) {
+    const auto home_dir =
+        path_info.home_dir.value_or(CF_EXPECT(SystemWideUserHome()));
+    prefix = android::base::Tokenize(home_dir, "/");
+  } else if (!android::base::StartsWith(path, "/")) {
+    prefix = android::base::Tokenize(working_dir, "/");
+  }
+  return prefix;
+}
+
+}  // namespace
+
+Result<std::string> EmulateAbsolutePath(const InputPathForm& path_info) {
+  const auto& path = path_info.path_to_convert;
+  std::string working_dir;
+  if (path_info.current_working_dir) {
+    working_dir = *path_info.current_working_dir;
+  } else {
+    working_dir = CurrentDirectory();
+  }
+  CF_EXPECT(android::base::StartsWith(working_dir, '/'),
+            "Current working directory should be given in an absolute path.");
+
+  if (path.empty()) {
+    LOG(ERROR) << "The requested path to convert an absolute path is empty.";
+    return "";
+  }
+
+  auto prefix = CF_EXPECT(CalculatePrefix(path_info));
+  std::vector<std::string> components;
+  components.insert(components.end(), prefix.begin(), prefix.end());
+  auto tokens = android::base::Tokenize(path, "/");
+  // remove first ~
+  if (!tokens.empty() && tokens.at(0) == "~") {
+    tokens.erase(tokens.begin());
+  }
+  components.insert(components.end(), tokens.begin(), tokens.end());
+
+  std::string combined = android::base::Join(components, "/");
+  CF_EXPECTF(!Contains(components, "~"),
+             "~ is not allowed in the middle of the path: {}", combined);
+
+  auto processed_tokens = std::accumulate(components.begin(), components.end(),
+                                          std::vector<std::string>{}, FoldPath);
+
+  const auto processed_path = "/" + android::base::Join(processed_tokens, "/");
+
+  std::string real_path = processed_path;
+  if (path_info.follow_symlink && FileExists(processed_path)) {
+    CF_EXPECTF(android::base::Realpath(processed_path, &real_path),
+               "Failed to effectively conduct readpath -f {}", processed_path);
+  }
+  return real_path;
 }
 
 }  // namespace cuttlefish

@@ -338,70 +338,6 @@ TEST(VmFlagsParserTest, ParseTwoInstancesVmManagerFlagEmptyJson) {
       << "vm_manager flag is missing or wrongly formatted";
 }
 
-TEST(VmFlagsParserTest, ParseTwoInstancesVmManagerFlagPartialJson) {
-  const char* test_string = R""""(
-{
-    "instances" :
-    [
-        {
-            "vm": {
-                "crosvm":{
-                }
-            }
-        },
-        {
-            "vm": {
-                "gem5":{
-                }
-            }
-        }
-    ]
-}
-  )"""";
-
-  Json::Value json_configs;
-  std::string json_text(test_string);
-
-  EXPECT_TRUE(ParseJsonString(json_text, json_configs))
-      << "Invalid Json string";
-  auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
-  EXPECT_TRUE(FindConfig(*serialized_data, R"(--vm_manager=crosvm,gem5)"))
-      << "vm_manager flag is missing or wrongly formatted";
-}
-
-TEST(VmFlagsParserTest, ParseTwoInstancesVmManagerFlagFullJson) {
-  const char* test_string = R""""(
-{
-    "instances" :
-    [
-        {
-            "vm": {
-                "qemu":{
-                }
-            }
-        },
-        {
-            "vm": {
-                "crosvm":{
-                }
-            }
-        }
-    ]
-}
-  )"""";
-
-  Json::Value json_configs;
-  std::string json_text(test_string);
-
-  EXPECT_TRUE(ParseJsonString(json_text, json_configs))
-      << "Invalid Json string";
-  auto serialized_data = LaunchCvdParserTester(json_configs);
-  EXPECT_TRUE(serialized_data.ok()) << serialized_data.error().Trace();
-  EXPECT_TRUE(FindConfig(*serialized_data, R"(--vm_manager=qemu_cli,crosvm)"))
-      << "vm_manager flag is missing or wrongly formatted";
-}
-
 TEST(VmFlagsParserTest, ParseTwoInstancesVmManagerFlagDefault) {
   const char* test_string = R""""(
 {
@@ -554,7 +490,6 @@ TEST(VmFlagsParserTest, ParseTwoInstancesSetupWizardFlagFullJson) {
       << "setupwizard_mode flag is missing or wrongly formatted";
 }
 
-#ifndef GENERATE_MVP_FLAGS_ONLY
 TEST(VmFlagsParserTest, ParseTwoInstancesUuidFlagEmptyJson) {
   const char* test_string = R""""(
 {
@@ -659,7 +594,6 @@ TEST(VmFlagsParserTest, ParseTwoInstancesUuidFlagFullJson) {
       R"(--uuid=870acfc4-c8c4-11e7-99ac-5065f31dc250,870acfc4-c8c4-11e7-99ac-5065f31dc251)"))
       << "uuid flag is missing or wrongly formatted";
 }
-#endif
 
 TEST(VmFlagsParserTest, ParseTwoInstancesSandboxFlagEmptyJson) {
   const char* test_string = R""""(

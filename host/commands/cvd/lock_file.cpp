@@ -34,8 +34,40 @@
 namespace cuttlefish {
 namespace cvd_impl {
 
+static Result<void> SetStatus(SharedFD& fd, const InUseState state) {
+  CF_EXPECT(fd->LSeek(0, SEEK_SET) == 0, fd->StrError());
+  char state_char = static_cast<char>(state);
+  CF_EXPECT(fd->Write(&state_char, 1) == 1, fd->StrError());
+  return {};
+}
+
+LockFile::LockFileReleaser::LockFileReleaser(const SharedFD& fd,
+                                             const std::string& lock_file_path)
+    : flocked_file_fd_(fd), lock_file_path_(lock_file_path) {}
+
+LockFile::LockFileReleaser::~LockFileReleaser() {
+  if (!flocked_file_fd_->IsOpen()) {
+    LOG(ERROR) << "SharedFD to " << lock_file_path_
+               << " is closed and unable to un-flock()";
+    return;
+  }
+  auto set_status_result = SetStatus(flocked_file_fd_, InUseState::kNotInUse);
+  if (!set_status_result.ok()) {
+    LOG(ERROR) << "The supposedly-locked file \"" << lock_file_path_
+               << " is not writable: " << set_status_result.error().Trace();
+  }
+  auto funlock_result = flocked_file_fd_->Flock(LOCK_UN | LOCK_NB);
+  if (!funlock_result.ok()) {
+    LOG(ERROR) << "Unlock the \"" << lock_file_path_
+               << "\" failed: " << funlock_result.error().Trace();
+  }
+}
+
 LockFile::LockFile(SharedFD fd, const std::string& lock_file_path)
-    : fd_(std::move(fd)), lock_file_path_(lock_file_path) {}
+    : fd_(std::move(fd)),
+      lock_file_path_(lock_file_path),
+      lock_file_lock_releaser_{
+          std::make_shared<LockFile::LockFileReleaser>(fd_, lock_file_path_)} {}
 
 Result<InUseState> LockFile::Status() const {
   CF_EXPECT(fd_->LSeek(0, SEEK_SET) == 0, fd_->StrError());
@@ -47,14 +79,12 @@ Result<InUseState> LockFile::Status() const {
     case static_cast<char>(InUseState::kNotInUse):
       return InUseState::kNotInUse;
     default:
-      return CF_ERR("Unexpected state value \"" << state_char << "\"");
+      return CF_ERRF("Unexpected state value \"{}\"", state_char);
   }
 }
 
 Result<void> LockFile::Status(InUseState state) {
-  CF_EXPECT(fd_->LSeek(0, SEEK_SET) == 0, fd_->StrError());
-  char state_char = static_cast<char>(state);
-  CF_EXPECT(fd_->Write(&state_char, 1) == 1, fd_->StrError());
+  CF_EXPECT(SetStatus(fd_, state));
   return {};
 }
 
@@ -75,7 +105,15 @@ Result<SharedFD> LockFileManager::OpenLockFile(const std::string& file_path) {
   auto parent_dir = android::base::Dirname(file_path);
   CF_EXPECT(EnsureDirectoryExists(parent_dir));
   auto fd = SharedFD::Open(file_path.data(), O_CREAT | O_RDWR, 0666);
-  CF_EXPECT(fd->IsOpen(), "open(\"" << file_path << "\"): " << fd->StrError());
+  int result = chmod(file_path.c_str(), 0666);
+  if (result) {
+    LOG(DEBUG) << "failed: chmod 666 " << file_path;
+  }
+  result = chmod(parent_dir.c_str(), 0755);
+  if (result) {
+    LOG(DEBUG) << "failed: chmod 755 " << parent_dir;
+  }
+  CF_EXPECTF(fd->IsOpen(), "open(\"{}\"): {}", file_path, fd->StrError());
   return fd;
 }
 

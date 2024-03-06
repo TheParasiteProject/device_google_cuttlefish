@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "host/commands/metrics/proto/cf_metrics_proto.h"
+#include "host/commands/metrics/proto/cf_metrics_protos.h"
 
 namespace cuttlefish {
 
@@ -25,8 +25,8 @@ class Clearcut {
                        cuttlefish::MetricsEvent::EventType event_type);
 
  public:
-  Clearcut();
-  ~Clearcut();
+  Clearcut() = default;
+  ~Clearcut() = default;
   static int SendVMStart(
       cuttlefish::CuttlefishLogEvent::DeviceType device_type);
   static int SendVMStop(cuttlefish::CuttlefishLogEvent::DeviceType device_type);

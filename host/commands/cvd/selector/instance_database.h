@@ -20,6 +20,7 @@
 #include <memory>
 #include <vector>
 
+#include "common/libs/utils/json.h"
 #include "common/libs/utils/result.h"
 #include "host/commands/cvd/selector/constant_reference.h"
 #include "host/commands/cvd/selector/instance_database_types.h"
@@ -46,6 +47,7 @@ class InstanceDatabase {
     std::string home_dir;
     std::string host_artifacts_path;
     std::string product_out_path;
+    TimeStamp start_time;
   };
   /** Adds instance group.
    *
@@ -73,9 +75,6 @@ class InstanceDatabase {
   };
   Result<void> AddInstances(const std::string& group_name,
                             const std::vector<InstanceInfo>& instances);
-
-  Result<void> SetBuildId(const std::string& group_name,
-                          const std::string& build_id);
 
   /*
    *  auto group = CF_EXPEC(FindGroups(...));
@@ -130,10 +129,14 @@ class InstanceDatabase {
   // actual Find implementations
   Result<Set<ConstRef<LocalInstanceGroup>>> FindGroupsByHome(
       const Value& home) const;
+  Result<Set<ConstRef<LocalInstanceGroup>>> FindGroupsById(
+      const Value& id) const;
   Result<Set<ConstRef<LocalInstanceGroup>>> FindGroupsByGroupName(
       const Value& group_name) const;
   Result<Set<ConstRef<LocalInstanceGroup>>> FindGroupsByInstanceName(
       const Value& instance_name) const;
+  Result<Set<ConstRef<LocalInstance>>> FindInstancesByHome(
+      const Value& home) const;
   Result<Set<ConstRef<LocalInstance>>> FindInstancesById(const Value& id) const;
   Result<Set<ConstRef<LocalInstance>>> FindInstancesByGroupName(
       const Value& instance_specific_name) const;

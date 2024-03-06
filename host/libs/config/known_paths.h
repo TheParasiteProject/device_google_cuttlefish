@@ -20,8 +20,10 @@
 namespace cuttlefish {
 
 std::string AdbConnectorBinary();
+std::string CasimirControlServerBinary();
 std::string ConfigServerBinary();
 std::string ConsoleForwarderBinary();
+std::string ControlEnvProxyServerBinary();
 std::string EchoServerBinary();
 std::string GnssGrpcProxyBinary();
 std::string KernelLogMonitorBinary();
@@ -33,6 +35,8 @@ std::string OpenwrtControlServerBinary();
 std::string PicaBinary();
 std::string ProcessRestarterBinary();
 std::string RootCanalBinary();
+std::string CasimirBinary();
+std::string ScreenRecordingServerBinary();
 std::string SecureEnvBinary();
 std::string SocketVsockProxyBinary();
 std::string StopCvdBinary();
@@ -43,5 +47,6 @@ std::string WebRtcSigServerBinary();
 std::string WebRtcSigServerProxyBinary();
 std::string WmediumdBinary();
 std::string WmediumdGenConfigBinary();
+std::string AutomotiveProxyBinary();
 
 } // namespace cuttlefish

@@ -17,28 +17,18 @@ package {
 }
 
 cc_library_shared {
-    name: "cf_proto",
+    name: "cf_metrics_proto",
     vendor_available: true,
 
     srcs: [
+        "common.proto",
         "cf_log.proto",
         "cf_metrics_event.proto",
         "clientanalytics.proto",
-        "common.proto",
     ],
 
     shared_libs: [
-        "libcuttlefish_fs",
-        "libcuttlefish_utils",
-        "libbase",
-        "libprotobuf-cpp-lite",
         "libprotobuf-cpp-full",
-    ],
-
-    static_libs: [
-        "libcuttlefish_host_config",
-        "libgflags",
-        "libjsoncpp",
     ],
 
     proto: {

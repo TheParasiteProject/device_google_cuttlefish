@@ -13,7 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <array>
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "host/libs/config/esp.h"
 #include "common/libs/fs/shared_buf.h"
@@ -23,6 +28,62 @@
 
 namespace cuttlefish {
 
+// For licensing and build reproducibility reasons, pick up the bootloaders
+// from the host Linux distribution (if present) and pack them into the
+// automatically generated ESP. If the user wants their own bootloaders,
+// they can use -esp_image=/path/to/esp.img to override, so we don't need
+// to accommodate customizations of this packing process.
+
+// Currently we only support Debian based distributions, and GRUB is built
+// for those distros to always load grub.cfg from EFI/debian/grub.cfg, and
+// nowhere else. If you want to add support for other distros, make the
+// extra directories below and copy the initial grub.cfg there as well
+//
+// Currently the Cuttlefish bootloaders are built only for x86 (32-bit),
+// ARM (QEMU only, 32-bit) and AArch64 (64-bit), and U-Boot will hard-code
+// these search paths. Install all bootloaders to one of these paths.
+// NOTE: For now, just ignore the 32-bit ARM version, as Debian doesn't
+//       build an EFI monolith for this architecture.
+// These are the paths Debian installs the monoliths to. If another distro
+// uses an alternative monolith path, add it to this table
+static constexpr char kBootSrcPathIA32[] =
+    "/usr/lib/grub/i386-efi/monolithic/grubia32.efi";
+static constexpr char kBootDestPathIA32[] = "/EFI/BOOT/BOOTIA32.EFI";
+
+static constexpr char kBootSrcPathAA64[] =
+    "/usr/lib/grub/arm64-efi/monolithic/grubaa64.efi";
+static constexpr char kBootDestPathAA64[] = "/EFI/BOOT/BOOTAA64.EFI";
+
+static constexpr char kBootDestPathRiscV64[] = "/EFI/BOOT/BOOTRISCV64.EFI";
+
+static constexpr char kMultibootModuleSrcPathIA32[] =
+    "/usr/lib/grub/i386-efi/multiboot.mod";
+static constexpr char kMultibootModuleDestPathIA32[] =
+    "/EFI/modules/multiboot.mod";
+
+static constexpr char kMultibootModuleSrcPathAA64[] =
+    "/usr/lib/grub/arm64-efi/multiboot.mod";
+static constexpr char kMultibootModuleDestPathAA64[] =
+    "/EFI/modules/multiboot.mod";
+
+static constexpr char kKernelDestPath[] = "/vmlinuz";
+static constexpr char kInitrdDestPath[] = "/initrd";
+static constexpr char kZedbootDestPath[] = "/zedboot.zbi";
+static constexpr char kMultibootBinDestPath[] = "/multiboot.bin";
+
+// TODO(b/260338443, b/260337906) remove ubuntu and debian variations
+// after migrating to grub-mkimage or adding grub binaries as a prebuilt
+static constexpr char kGrubDebianConfigDestPath[] = "/EFI/debian/grub.cfg";
+static constexpr char kGrubUbuntuConfigDestPath[] = "/EFI/ubuntu/grub.cfg";
+static constexpr char kGrubConfigDestDirectoryPath[] = "/boot/grub";
+static constexpr char kGrubConfigDestPath[] = "/boot/grub/grub.cfg";
+
+static constexpr std::array kGrubModulesX86{
+    "normal", "configfile", "linux", "linuxefi",   "multiboot", "ls",
+    "cat",    "help",       "fat",   "part_msdos", "part_gpt"};
+static constexpr char kGrubModulesPath[] = "/usr/lib/grub/";
+static constexpr char kGrubModulesX86Name[] = "i386-efi";
+
 bool NewfsMsdos(const std::string& data_image, int data_image_mb,
                 int offset_num_mb) {
   off_t image_size_bytes = static_cast<off_t>(data_image_mb) << 20;
@@ -30,7 +91,7 @@ bool NewfsMsdos(const std::string& data_image, int data_image_mb,
   image_size_bytes -= offset_size_bytes;
   off_t image_size_sectors = image_size_bytes / 512;
   auto newfs_msdos_path = HostBinaryPath("newfs_msdos");
-  return execute({newfs_msdos_path,
+  return Execute({newfs_msdos_path,
                   "-F",
                   "32",
                   "-m",
@@ -65,10 +126,9 @@ bool CanGenerateEsp(Arch arch) {
     case Arch::X86:
     case Arch::X86_64: {
       const auto x86_modules = std::string(kGrubModulesPath) + std::string(kGrubModulesX86Name);
-      const auto modules_presented = all_of(kGrubModulesX86.begin(), kGrubModulesX86.end(),
-                                            [&](const std::string& m) {
-                                              return FileExists(x86_modules + m);
-                                            });
+      const auto modules_presented = std::all_of(
+          kGrubModulesX86.begin(), kGrubModulesX86.end(),
+          [&](const std::string& m) { return FileExists(x86_modules + m); });
       if (modules_presented) return true;
 
       const auto monolith_presented = FileExists(kBootSrcPathIA32);
@@ -79,38 +139,40 @@ bool CanGenerateEsp(Arch arch) {
   return false;
 }
 
-bool MsdosMakeDirectories(const std::string& image_path,
-                          const std::vector<std::string>& directories) {
+static bool MsdosMakeDirectories(const std::string& image_path,
+                                 const std::vector<std::string>& directories) {
   auto mmd = HostBinaryPath("mmd");
   std::vector<std::string> command {mmd, "-i", image_path};
   command.insert(command.end(), directories.begin(), directories.end());
 
-  const auto success = execute(command);
+  const auto success = Execute(command);
   if (success != 0) {
     return false;
   }
   return true;
 }
 
-bool CopyToMsdos(const std::string& image, const std::string& path,
-                 const std::string& destination) {
+static bool CopyToMsdos(const std::string& image, const std::string& path,
+                        const std::string& destination) {
   const auto mcopy = HostBinaryPath("mcopy");
-  const auto success = execute({mcopy, "-o", "-i", image, "-s", path, destination});
+  const auto success =
+      Execute({mcopy, "-o", "-i", image, "-s", path, destination});
   if (success != 0) {
     return false;
   }
   return true;
 }
 
-bool GrubMakeImage(const std::string& prefix, const std::string& format,
-                   const std::string& directory, const std::string& output,
-                   std::vector<std::string> modules) {
+template <typename T>
+static bool GrubMakeImage(const std::string& prefix, const std::string& format,
+                          const std::string& directory,
+                          const std::string& output, const T& modules) {
   std::vector<std::string> command = {"grub-mkimage", "--prefix", prefix,
                                       "--format", format, "--directory", directory,
                                       "--output", output};
   std::move(modules.begin(), modules.end(), std::back_inserter(command));
 
-  const auto success = execute(command);
+  const auto success = Execute(command);
   return success == 0;
 }
 
@@ -254,6 +316,48 @@ EspBuilder AddGrubConfig(const std::string& config) {
          .File(config, kGrubConfigDestPath, /*required*/ true);
 
   return builder;
+}
+
+AndroidEfiLoaderEspBuilder& AndroidEfiLoaderEspBuilder::EfiLoaderPath(
+    std::string efi_loader_path) & {
+  efi_loader_path_ = efi_loader_path;
+  return *this;
+}
+
+AndroidEfiLoaderEspBuilder& AndroidEfiLoaderEspBuilder::Architecture(
+    Arch arch) & {
+  arch_ = arch;
+  return *this;
+}
+
+bool AndroidEfiLoaderEspBuilder::Build() const {
+  if (efi_loader_path_.empty()) {
+    LOG(ERROR)
+        << "Efi loader is required argument for AndroidEfiLoaderEspBuilder";
+    return false;
+  }
+  EspBuilder builder = EspBuilder(image_path_);
+  builder.Directory("EFI").Directory("EFI/BOOT");
+  std::string dest_path;
+  switch (arch_) {
+    case Arch::Arm:
+    case Arch::Arm64:
+      dest_path = kBootDestPathAA64;
+      break;
+    case Arch::RiscV64:
+      dest_path = kBootDestPathRiscV64;
+      break;
+    case Arch::X86:
+    case Arch::X86_64: {
+      dest_path = kBootDestPathIA32;
+      break;
+      default:
+        LOG(ERROR) << "Unknown architecture";
+        return false;
+    }
+  }
+  builder.File(efi_loader_path_, dest_path, /* required */ true);
+  return builder.Build();
 }
 
 LinuxEspBuilder& LinuxEspBuilder::Argument(std::string key, std::string value) & {

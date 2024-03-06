@@ -37,6 +37,7 @@ body, body.dark-theme {
   --button-disabled-fg: #9aa0a6; /* Google grey 500 */
   --button-pressed-border: #505050;
   --button-pressed-bg: #303030;
+  --display-border: solid #202020 1px;
 }
 /* End of dark theme */
 
@@ -63,6 +64,7 @@ body.light-theme {
   --button-disabled-fg: #c4c4c4; /* Google grey 300 */
   --button-pressed-border: #c4c4c4; /* Google grey 300 */
   --button-pressed-bg: #d9d9d9; /* Google grey 200 */
+  --display-border: solid #f0f0f0 1px;
 }
 /* End of light theme */
 
@@ -104,9 +106,6 @@ body {
   align-items: center;
 }
 
-#camera_off_btn {
-  display: none !important;
-}
 #record_video_btn {
   display: none !important;
 }
@@ -182,7 +181,7 @@ body {
   background-color: transparent;
 }
 .modal-button, .modal-button-highlight {
-  background:    var(--modal-button-bg)
+  background:    var(--modal-button-bg);
   border-radius: 10px;
   box-shadow:    1px 1px var(--modal-button-shadow);
   padding:       10px 20px;
@@ -267,7 +266,18 @@ body {
 .location-button {
   text-align: center;
 }
-
+.sensors{
+  position: sticky;
+  right: 0;
+  top: 0;
+  text-align: right;
+}
+.fixed-orientation{
+  position: sticky;
+  right: 0;
+  top: 0;
+  text-align: right;
+}
 .control-panel-column {
   width: 50px;
   /* Items inside this use a column Flexbox.*/
@@ -281,6 +291,8 @@ body {
   background-color: var(--custom-button-bg);
   height: fit-content;
   border-radius: 10px;
+  top: 10px;
+  position: sticky;
 }
 
 .control-panel-column button {
@@ -366,4 +378,5 @@ body {
   max-width: 100%;
   max-height: 100%;
   touch-action: none;
+  border: var(--display-border);
 }

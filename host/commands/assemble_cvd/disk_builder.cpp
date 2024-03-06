@@ -46,6 +46,15 @@ static std::chrono::system_clock::time_point LastUpdatedInputDisk(
   return ret;
 }
 
+DiskBuilder& DiskBuilder::EntireDisk(std::string disk) & {
+  entire_disk_ = std::move(disk);
+  return *this;
+}
+DiskBuilder DiskBuilder::EntireDisk(std::string disk) && {
+  entire_disk_ = std::move(disk);
+  return *this;
+}
+
 DiskBuilder& DiskBuilder::Partitions(std::vector<ImagePartition> partitions) & {
   partitions_ = std::move(partitions);
   return *this;
@@ -133,9 +142,13 @@ Result<std::string> DiskBuilder::TextConfig() {
   CF_EXPECT(!vm_manager_.empty(), "Missing vm_manager");
   disk_conf << vm_manager_ << "\n";
 
-  CF_EXPECT(!partitions_.empty(), "No partitions");
+  CF_EXPECT(!partitions_.empty() ^ !entire_disk_.empty(),
+            "Specify either partitions or a whole disk");
   for (auto& partition : partitions_) {
     disk_conf << partition.image_file_path << "\n";
+  }
+  if (!entire_disk_.empty()) {
+    disk_conf << entire_disk_;
   }
   return disk_conf.str();
 }
@@ -151,7 +164,12 @@ Result<bool> DiskBuilder::WillRebuildCompositeDisk() {
     return true;
   }
 
-  CF_EXPECT(!partitions_.empty(), "No partitions");
+  CF_EXPECT(!partitions_.empty() ^ !entire_disk_.empty(),
+            "Specify either partitions or a whole disk");
+  if (!entire_disk_.empty()) {
+    LOG(DEBUG) << "No composite disk to build";
+    return false;
+  }
   auto last_component_mod_time = LastUpdatedInputDisk(partitions_);
 
   CF_EXPECT(!composite_disk_path_.empty(), "No composite disk path");
@@ -169,6 +187,10 @@ Result<bool> DiskBuilder::WillRebuildCompositeDisk() {
 }
 
 Result<bool> DiskBuilder::BuildCompositeDiskIfNecessary() {
+  if (!entire_disk_.empty()) {
+    LOG(DEBUG) << "No composite disk to build";
+    return false;
+  }
   if (!CF_EXPECT(WillRebuildCompositeDisk())) {
     return false;
   }
@@ -193,6 +215,9 @@ Result<bool> DiskBuilder::BuildCompositeDiskIfNecessary() {
 }
 
 Result<bool> DiskBuilder::BuildOverlayIfNecessary() {
+#ifdef __APPLE__
+  return false;
+#else
   bool can_reuse_overlay = resume_if_possible_;
 
   CF_EXPECT(!overlay_path_.empty(), "Overlay path missing");
@@ -216,6 +241,7 @@ Result<bool> DiskBuilder::BuildOverlayIfNecessary() {
   CreateQcowOverlay(crosvm_path_, composite_disk_path_, overlay_path_);
 
   return true;
+#endif
 }
 
 }  // namespace cuttlefish

@@ -18,6 +18,7 @@ PRODUCT_MAKEFILES := \
 	aosp_cf_arm_minidroid:$(LOCAL_DIR)/vsoc_arm_minidroid/aosp_cf.mk \
 	aosp_cf_arm64_auto:$(LOCAL_DIR)/vsoc_arm64_only/auto/aosp_cf.mk \
 	aosp_cf_arm64_phone:$(LOCAL_DIR)/vsoc_arm64/phone/aosp_cf.mk \
+	aosp_cf_arm64_phone_pgagnostic:$(LOCAL_DIR)/vsoc_arm64_pgagnostic/phone/aosp_cf.mk \
 	aosp_cf_arm64_phone_fullmte:$(LOCAL_DIR)/vsoc_arm64_only/phone/aosp_cf_fullmte.mk \
 	aosp_cf_arm64_phone_hwasan:$(LOCAL_DIR)/vsoc_arm64/phone/aosp_cf_hwasan.mk \
 	aosp_cf_arm64_only_phone:$(LOCAL_DIR)/vsoc_arm64_only/phone/aosp_cf.mk \
@@ -38,8 +39,10 @@ PRODUCT_MAKEFILES := \
 	aosp_cf_x86_64_ssi:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_ssi.mk \
 	aosp_cf_x86_64_tv:$(LOCAL_DIR)/vsoc_x86_64/tv/aosp_cf.mk \
 	aosp_cf_x86_64_foldable:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf_foldable.mk \
+	aosp_cf_x86_64_host:$(LOCAL_DIR)/vsoc_x86_64_host/aosp_cf.mk \
 	aosp_cf_x86_64_minidroid:$(LOCAL_DIR)/vsoc_x86_64_minidroid/aosp_cf.mk \
 	aosp_cf_x86_64_only_phone:$(LOCAL_DIR)/vsoc_x86_64_only/phone/aosp_cf.mk \
+	aosp_cf_x86_64_phone_pgagnostic:$(LOCAL_DIR)/vsoc_x86_64_pgagnostic/phone/aosp_cf.mk \
 	aosp_cf_x86_64_only_phone_hsum:$(LOCAL_DIR)/vsoc_x86_64_only/phone/aosp_cf_hsum.mk \
 	aosp_cf_x86_64_slim:$(LOCAL_DIR)/vsoc_x86_64_only/slim/aosp_cf.mk \
 	aosp_cf_x86_64_wear:$(LOCAL_DIR)/vsoc_x86_64_only/wear/aosp_cf.mk \
@@ -51,14 +54,15 @@ PRODUCT_MAKEFILES := \
 	aosp_cf_x86_wear:$(LOCAL_DIR)/vsoc_x86/wear/aosp_cf.mk \
 
 COMMON_LUNCH_CHOICES := \
-	aosp_cf_arm64_auto-userdebug \
-	aosp_cf_arm64_phone-userdebug \
-	aosp_cf_x86_64_only_phone_hsum-userdebug \
-	aosp_cf_x86_64_pc-userdebug \
-	aosp_cf_x86_64_phone-userdebug \
-	aosp_cf_x86_64_foldable-userdebug \
-	aosp_cf_x86_64_auto-userdebug \
-	aosp_cf_x86_64_auto_mdnd-userdebug \
-	aosp_cf_x86_phone-userdebug \
-	aosp_cf_x86_tv-userdebug \
-	aosp_cf_x86_64_tv-userdebug
+	aosp_cf_arm64_auto-trunk_staging-userdebug \
+	aosp_cf_arm64_phone-trunk_staging-userdebug \
+	aosp_cf_riscv64_phone-trunk_staging-userdebug \
+	aosp_cf_x86_64_only_phone_hsum-trunk_staging-userdebug \
+	aosp_cf_x86_64_pc-trunk_staging-userdebug \
+	aosp_cf_x86_64_phone-trunk_staging-userdebug \
+	aosp_cf_x86_64_foldable-trunk_staging-userdebug \
+	aosp_cf_x86_64_auto-trunk_staging-userdebug \
+	aosp_cf_x86_64_auto_mdnd-trunk_staging-userdebug \
+	aosp_cf_x86_phone-trunk_staging-userdebug \
+	aosp_cf_x86_tv-trunk_staging-userdebug \
+	aosp_cf_x86_64_tv-trunk_staging-userdebug

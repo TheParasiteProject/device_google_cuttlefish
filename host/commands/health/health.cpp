@@ -24,11 +24,10 @@
 #include "host/libs/vm_manager/vm_manager.h"
 
 std::string GetControlSocketPath(const cuttlefish::CuttlefishConfig& config) {
-  return config.ForDefaultInstance().PerInstanceInternalUdsPath(
-      "crosvm_control.sock");
+  return config.ForDefaultInstance().CrosvmSocketPath();
 }
 
-std::string USAGE_MESSAGE =
+static constexpr char kUsageMessage[] =
     "<key> [value]\n"
     "Excluding the value will enumerate the possible values to set\n"
     "\n"
@@ -74,13 +73,13 @@ int aconline() {
 }
 
 int usage() {
-  std::cout << "health " << USAGE_MESSAGE;
+  std::cout << "health " << kUsageMessage;
   return 1;
 }
 
 int main(int argc, char** argv) {
   ::android::base::InitLogging(argv, android::base::StderrLogger);
-  gflags::SetUsageMessage(USAGE_MESSAGE);
+  gflags::SetUsageMessage(kUsageMessage);
 
   auto config = cuttlefish::CuttlefishConfig::Get();
   if (!config) {

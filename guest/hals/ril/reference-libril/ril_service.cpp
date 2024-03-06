@@ -16,11 +16,11 @@
 
 #define LOG_TAG "RILC"
 
-#include "RefRadioSim.h"
 #include "RefImsMedia.h"
 #include "RefRadioIms.h"
 #include "RefRadioModem.h"
 #include "RefRadioNetwork.h"
+#include "RefRadioSim.h"
 
 #include <android-base/logging.h>
 #include <android/binder_manager.h>
@@ -4558,7 +4558,7 @@ Return<void> RadioImpl_1_6::setIndicationFilter_1_5(
         int32_t serial,
         hidl_bitfield<::android::hardware::radio::V1_5::IndicationFilter> indicationFilter) {
 #if VDBG
-    RLOGE("setIndicationFilter_1_5: serial %d");
+    RLOGE("setIndicationFilter_1_5: serial %d", serial);
 #endif
     dispatchInts(serial, mSlotId, RIL_REQUEST_SET_UNSOLICITED_RESPONSE_FILTER, 1, indicationFilter);
     return Void();
@@ -11067,15 +11067,17 @@ void convertRilDataCallToHal(RIL_Data_Call_Response_v11* dcResponse,
     dcResult.ifname = convertCharPtrToHidlString(dcResponse->ifname);
 
     std::vector<::android::hardware::radio::V1_5::LinkAddress> linkAddresses;
-    std::stringstream ss(static_cast<std::string>(dcResponse->addresses));
-    std::string tok;
-    while(getline(ss, tok, ' ')) {
-        ::android::hardware::radio::V1_5::LinkAddress la;
-        la.address = hidl_string(tok);
-        la.properties = 0;
-        la.deprecationTime = INT64_MAX;  // LinkAddress.java LIFETIME_PERMANENT = Long.MAX_VALUE
-        la.expirationTime = INT64_MAX;  // --"--
-        linkAddresses.push_back(la);
+    if (dcResponse->addresses != NULL) {
+        std::stringstream ss(static_cast<std::string>(dcResponse->addresses));
+        std::string tok;
+        while (getline(ss, tok, ' ')) {
+            ::android::hardware::radio::V1_5::LinkAddress la;
+            la.address = hidl_string(tok);
+            la.properties = 0;
+            la.deprecationTime = INT64_MAX;  // LinkAddress.java LIFETIME_PERMANENT = Long.MAX_VALUE
+            la.expirationTime = INT64_MAX;   // --"--
+            linkAddresses.push_back(la);
+        }
     }
 
     dcResult.addresses = linkAddresses;
@@ -13381,6 +13383,13 @@ static void publishRadioHal(std::shared_ptr<compat::DriverContext> ctx, sp<V1_5:
     const auto instance = T::descriptor + "/"s + slot;
     RLOGD("Publishing %s", instance.c_str());
 
+    if (!AServiceManager_isDeclared(instance.c_str())) {
+        RLOGW("%s is not declared in VINTF (this may be intentional on `next` when interface is "
+              "not frozen)",
+              instance.c_str());
+        return;
+    }
+
     auto aidlHal = ndk::SharedRefBase::make<T>(ctx, hidlHal, cm);
     gPublishedHals.push_back(aidlHal);
     const auto status = AServiceManager_addService(aidlHal->asBinder().get(), instance.c_str());
@@ -13441,6 +13450,7 @@ void radio_1_6::registerService(RIL_RadioFunctions *callbacks, CommandInfo *comm
                                               std::string("default"));
         publishRadioHal<cf::ril::RefRadioModem>(context, radioHidl, callbackMgr, slot);
         publishRadioHal<cf::ril::RefRadioSim>(context, radioHidl, callbackMgr, slot);
+
         RLOGD("registerService: OemHook is enabled = %s", kOemHookEnabled ? "true" : "false");
         if (kOemHookEnabled) {
             oemHookService[i] = new OemHookImpl;

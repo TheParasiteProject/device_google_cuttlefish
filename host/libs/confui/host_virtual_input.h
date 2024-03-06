@@ -18,9 +18,12 @@
 
 #include <cstdint>
 
+#include <memory>
+
 #include <fruit/fruit.h>
 
 #include "host/libs/confui/host_server.h"
+#include "host/libs/input_connector/input_connector.h"
 
 namespace cuttlefish {
 namespace confui {
@@ -30,20 +33,27 @@ enum class ConfUiKeys : std::uint32_t { Confirm = 7, Cancel = 8 };
  * webrtc will deliver the user inputs from their client
  * to this class object
  */
-class HostVirtualInput {
+class HostVirtualInput : public InputConnector {
  public:
-  INJECT(HostVirtualInput(HostServer& host_server,
-                          HostModeCtrl& host_mode_ctrl));
+  INJECT(HostVirtualInput(HostServer& host_server, HostModeCtrl& host_mode_ctrl,
+                          InputConnector& android_mode_input));
 
-  void TouchEvent(const int x, const int y, const bool is_down);
-  void UserAbortEvent();
   ~HostVirtualInput() = default;
+
+  void UserAbortEvent();
+
   // guarantees that if this returns true, it is confirmation UI mode
   bool IsConfUiActive();
+
+  HostServer& host_server() { return host_server_; }
+
+  // InputConnector implementation.
+  std::unique_ptr<EventSink> CreateSink() override;
 
  private:
   HostServer& host_server_;
   HostModeCtrl& host_mode_ctrl_;
+  InputConnector& android_mode_input_;
 };
 }  // namespace confui
 }  // namespace cuttlefish

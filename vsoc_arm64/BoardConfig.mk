@@ -30,13 +30,22 @@ TARGET_2ND_CPU_ABI2 := armeabi
 TARGET_2ND_CPU_VARIANT := cortex-a53
 TARGET_TRANSLATE_2ND_ARCH := false
 
-HOST_CROSS_OS := linux_bionic
+HOST_CROSS_OS := linux_musl
 HOST_CROSS_ARCH := arm64
 HOST_CROSS_2ND_ARCH :=
 
 -include device/google/cuttlefish/shared/BoardConfig.mk
+-include device/google/cuttlefish/shared/bluetooth/BoardConfig.mk
 -include device/google/cuttlefish/shared/camera/BoardConfig.mk
+-include device/google/cuttlefish/shared/gnss/BoardConfig.mk
 -include device/google/cuttlefish/shared/graphics/BoardConfig.mk
+-include device/google/cuttlefish/shared/identity/BoardConfig.mk
+-include device/google/cuttlefish/shared/reboot_escrow/BoardConfig.mk
+-include device/google/cuttlefish/shared/sensors/BoardConfig.mk
 -include device/google/cuttlefish/shared/swiftshader/BoardConfig.mk
 -include device/google/cuttlefish/shared/telephony/BoardConfig.mk
+-include device/google/cuttlefish/shared/vibrator/BoardConfig.mk
+
+ifneq ($(BOARD_IS_AUTOMOTIVE), true)
 -include device/google/cuttlefish/shared/virgl/BoardConfig.mk
+endif

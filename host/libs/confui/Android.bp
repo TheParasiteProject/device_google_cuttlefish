@@ -29,7 +29,7 @@ cc_library_headers {
     ],
 }
 
-cc_library_static {
+cc_library {
     name: "libcuttlefish_confui_host",
     srcs: [
         "cbor.cc",
@@ -60,6 +60,7 @@ cc_library_static {
         "libcuttlefish_host_config",
         "libcuttlefish_utils",
         "libcuttlefish_confui",
+        "libcuttlefish_input_connector",
         "libcuttlefish_security",
         "libcuttlefish_wayland_server",
         "libft2.nodep",

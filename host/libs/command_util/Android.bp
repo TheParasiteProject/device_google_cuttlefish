@@ -17,12 +17,15 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-cc_library_static {
+cc_library {
     name: "libcuttlefish_command_util",
     srcs: [
+        "launcher_message.cc",
+        "snapshot_utils.cc",
         "util.cc",
     ],
     shared_libs: [
+        "liblog",
         "libcuttlefish_fs",
         "libcuttlefish_utils",
         "libjsoncpp",
@@ -31,5 +34,10 @@ cc_library_static {
         "libbase",
         "libcuttlefish_host_config",
     ],
+    target: {
+        darwin: {
+            enabled: true,
+        },
+    },
     defaults: ["cuttlefish_host"],
 }

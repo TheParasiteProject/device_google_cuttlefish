@@ -19,12 +19,10 @@
 #include <fruit/fruit.h>
 
 #include "host/libs/config/cuttlefish_config.h"
-#include "host/libs/config/feature.h"
 
 namespace cuttlefish {
 
-fruit::Component<fruit::Required<const CuttlefishConfig,
-                                 const CuttlefishConfig::InstanceSpecific>>
-validationComponent();
-
+Result<void> ValidateTapDevices(const CuttlefishConfig::InstanceSpecific&);
+Result<void> ValidateHostConfiguration();
+Result<void> ValidateHostKernel();
 }

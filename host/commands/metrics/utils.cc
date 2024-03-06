@@ -17,7 +17,6 @@
 #include <android-base/strings.h>
 #include <curl/curl.h>
 #include <gflags/gflags.h>
-#include <json/json.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <string.h>
@@ -30,59 +29,37 @@
 
 #include "common/libs/utils/tee_logging.h"
 #include "host/commands/metrics/metrics_defs.h"
-#include "host/commands/metrics/proto/cf_metrics_proto.h"
 #include "host/commands/metrics/utils.h"
-#include "host/libs/config/cuttlefish_config.h"
-#include "host/libs/vm_manager/crosvm_manager.h"
-#include "host/libs/vm_manager/qemu_manager.h"
 
 using cuttlefish::MetricsExitCodes;
 
 namespace metrics {
 
-static std::string hashing(std::string input) {
+static std::string Hashing(const std::string& input) {
   const std::hash<std::string> hasher;
   return std::to_string(hasher(input));
 }
 
-cuttlefish::MetricsEvent::OsType osType() {
+std::string GetOsName() {
   struct utsname buf;
   if (uname(&buf) != 0) {
     LOG(ERROR) << "failed to retrieve system information";
-    return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_UNSPECIFIED;
+    return "Error";
   }
-  std::string sysname(buf.sysname);
-  std::string machine(buf.machine);
-
-  if (sysname != "Linux") {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_UNSPECIFIED;
-  }
-  if (machine == "x86_64") {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_LINUX_X86_64;
-  }
-  if (machine == "x86") {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_LINUX_X86;
-  }
-  if (machine == "aarch64" || machine == "arm64") {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_LINUX_AARCH64;
-  }
-  if (machine[0] == 'a') {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_LINUX_AARCH32;
-  }
-  return cuttlefish::MetricsEvent::CUTTLEFISH_OS_TYPE_UNSPECIFIED;
+  return std::string(buf.sysname);
 }
 
-std::string sessionId(uint64_t now_ms) {
+std::string GenerateSessionId(uint64_t now_ms) {
   uint64_t now_day = now_ms / 1000 / 60 / 60 / 24;
-  return hashing(macAddress() + std::to_string(now_day));
+  return Hashing(GetMacAddress() + std::to_string(now_day));
 }
 
-std::string cfVersion() {
+std::string GetCfVersion() {
   // TODO: per ellisr@ leave empty for now
   return "";
 }
 
-std::string osVersion() {
+std::string GetOsVersion() {
   struct utsname buf;
   if (uname(&buf) != 0) {
     LOG(ERROR) << "failed to retrieve system information";
@@ -91,7 +68,7 @@ std::string osVersion() {
   return version;
 }
 
-std::string macAddress() {
+std::string GetMacAddress() {
   int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
   if (sock == -1) {
     LOG(ERROR) << "couldn't connect to socket";
@@ -133,49 +110,21 @@ std::string macAddress() {
   return mac;
 }
 
-std::string company() {
+std::string GetCompany() {
   // TODO: per ellisr@ leave hard-coded for now
   return "GOOGLE";
 }
 
-cuttlefish::MetricsEvent::VmmType vmmManager() {
-  auto config = cuttlefish::CuttlefishConfig::Get();
-  CHECK(config) << "Could not open cuttlefish config";
-  auto vmm = config->vm_manager();
-  if (vmm == cuttlefish::vm_manager::CrosvmManager::name()) {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_VMM_TYPE_CROSVM;
-  }
-  if (vmm == cuttlefish::vm_manager::QemuManager::name()) {
-    return cuttlefish::MetricsEvent::CUTTLEFISH_VMM_TYPE_QEMU;
-  }
-  return cuttlefish::MetricsEvent::CUTTLEFISH_VMM_TYPE_UNSPECIFIED;
-}
-
-std::string vmmVersion() {
+std::string GetVmmVersion() {
   // TODO: per ellisr@ leave empty for now
   return "";
 }
 
-uint64_t epochTimeMs() {
+uint64_t GetEpochTimeMs() {
   auto now = std::chrono::system_clock::now().time_since_epoch();
   uint64_t milliseconds_since_epoch =
       std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
   return milliseconds_since_epoch;
-}
-
-cuttlefish::CuttlefishLogEvent* sampleEvent() {
-  cuttlefish::CuttlefishLogEvent* event = new cuttlefish::CuttlefishLogEvent();
-  event->set_device_type(
-      cuttlefish::CuttlefishLogEvent::CUTTLEFISH_DEVICE_TYPE_HOST);
-  return event;
-}
-
-std::string protoToStr(LogEvent* event) {
-  std::string output;
-  if (!event->SerializeToString(&output)) {
-    LOG(ERROR) << "failed to serialize proto LogEvent";
-  }
-  return output;
 }
 
 size_t curl_out_writer([[maybe_unused]] char* response, size_t size,
@@ -183,76 +132,75 @@ size_t curl_out_writer([[maybe_unused]] char* response, size_t size,
   return size * nmemb;
 }
 
-MetricsExitCodes postReq(std::string output, metrics::ClearcutServer server) {
-  const char *clearcut_scheme, *clearcut_host, *clearcut_path, *clearcut_port;
+CURLUcode SetCurlUrlPart(CURLU* url, CURLUPart part, const char* value) {
+  CURLUcode urc = curl_url_set(url, part, value, 0);
+  if (urc != 0) {
+    LOG(ERROR) << "Failed to set url part '" << part << "' to '" << value
+               << "': Error '" << curl_url_strerror(urc) << "'";
+  }
+  return urc;
+}
+
+std::string ClearcutServerUrl(metrics::ClearcutServer server) {
   switch (server) {
     case metrics::kLocal:
-      clearcut_scheme = "http";
-      clearcut_host = "localhost";
-      clearcut_path = "/log";
-      clearcut_port = "27910";
-      break;
+      return "http://localhost:27910/log";
+
     case metrics::kStaging:
-      clearcut_scheme = "https";
-      clearcut_host = "play.googleapis.com";
-      clearcut_path = "/staging/log";
-      clearcut_port = "443";
-      break;
+      return "https://play.googleapis.com:443/staging/log";
+
     case metrics::kProd:
-      clearcut_scheme = "https";
-      clearcut_host = "play.googleapis.com";
-      clearcut_path = "/log";
-      clearcut_port = "443";
-      break;
+      return "https://play.googleapis.com:443/log";
+
     default:
-      return cuttlefish::kInvalidHostConfiguration;
+      LOG(FATAL) << "Invalid host configuration";
+      return "";
+  }
+}
+
+MetricsExitCodes PostRequest(const std::string& output,
+                             metrics::ClearcutServer server) {
+  std::string clearcut_url = ClearcutServerUrl(server);
+
+  std::unique_ptr<CURLU, void (*)(CURLU*)> url(curl_url(), curl_url_cleanup);
+  if (!url) {
+    LOG(ERROR) << "Failed to initialize CURLU.";
+    return cuttlefish::kMetricsError;
   }
 
-  CURLU* url = curl_url();
-  CURLUcode urc = curl_url_set(url, CURLUPART_SCHEME, clearcut_scheme, 0);
+  CURLUcode urc =
+      curl_url_set(url.get(), CURLUPART_URL, clearcut_url.c_str(), 0);
   if (urc != 0) {
-    LOG(ERROR) << "failed to set url CURLUPART_SCHEME";
-    return cuttlefish::kMetricsError;
-  }
-  urc = curl_url_set(url, CURLUPART_HOST, clearcut_host, 0);
-  if (urc != 0) {
-    LOG(ERROR) << "failed to set url CURLUPART_HOST";
-    return cuttlefish::kMetricsError;
-  }
-  urc = curl_url_set(url, CURLUPART_PATH, clearcut_path, 0);
-  if (urc != 0) {
-    LOG(ERROR) << "failed to set url CURLUPART_PATH";
-    return cuttlefish::kMetricsError;
-  }
-  urc = curl_url_set(url, CURLUPART_PORT, clearcut_port, 0);
-  if (urc != 0) {
-    LOG(ERROR) << "failed to set url CURLUPART_PORT";
+    LOG(ERROR) << "Failed to set url to " << url.get() << clearcut_url
+               << "': " << curl_url_strerror(urc) << "'";
     return cuttlefish::kMetricsError;
   }
   curl_global_init(CURL_GLOBAL_ALL);
-  CURL* curl = curl_easy_init();
-  if (curl) {
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &curl_out_writer);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_CURLU, url);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, output.c_str());
-    CURLcode rc = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    if (http_code == 200 && rc != CURLE_ABORTED_BY_CALLBACK) {
-      LOG(INFO) << "Metrics posted to ClearCut";
-    } else {
-      LOG(ERROR) << "Metrics message failed: [" << output << "]";
-      LOG(ERROR) << "http error code: " << http_code;
-      if (rc != CURLE_OK) {
-        LOG(ERROR) << "curl error code: " << rc << " | "
-                   << curl_easy_strerror(rc);
-      }
-      return cuttlefish::kMetricsError;
-    }
-    curl_easy_cleanup(curl);
+
+  std::unique_ptr<CURL, void (*)(CURL*)> curl(curl_easy_init(),
+                                              curl_easy_cleanup);
+
+  if (!curl) {
+    LOG(ERROR) << "Failed to initialize CURL.";
+    return cuttlefish::kMetricsError;
   }
-  curl_url_cleanup(url);
+
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, &curl_out_writer);
+  curl_easy_setopt(curl.get(), CURLOPT_SSL_VERIFYPEER, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_CURLU, url.get());
+  curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, output.data());
+  curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, output.size());
+  CURLcode rc = curl_easy_perform(curl.get());
+  long http_code = 0;
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+
+  if (rc == CURLE_ABORTED_BY_CALLBACK || http_code != 200) {
+    LOG(ERROR) << "Metrics message failed: [" << output << "]";
+    LOG(ERROR) << "http error code: " << http_code;
+    LOG(ERROR) << "curl error code: " << rc << " | " << curl_easy_strerror(rc);
+    return cuttlefish::kMetricsError;
+  }
+  LOG(INFO) << "Metrics posted to ClearCut";
   curl_global_cleanup();
   return cuttlefish::kSuccess;
 }

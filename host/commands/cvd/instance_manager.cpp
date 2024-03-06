@@ -23,7 +23,9 @@
 #include <sstream>
 
 #include <android-base/file.h>
-#include <fruit/fruit.h>
+#include <android-base/scopeguard.h>
+#include <fmt/format.h>
+#include <json/value.h>
 
 #include "common/libs/fs/shared_buf.h"
 #include "common/libs/fs/shared_fd.h"
@@ -34,10 +36,12 @@
 #include "common/libs/utils/subprocess.h"
 #include "cvd_server.pb.h"
 #include "host/commands/cvd/common_utils.h"
+#include "host/commands/cvd/selector/instance_database_types.h"
 #include "host/commands/cvd/selector/instance_database_utils.h"
 #include "host/commands/cvd/selector/selector_constants.h"
 #include "host/commands/cvd/server_constants.h"
-#include "host/libs/config/cuttlefish_config.h"
+#include "host/libs/config/config_constants.h"
+#include "host/libs/config/config_utils.h"
 #include "host/libs/config/known_paths.h"
 
 namespace cuttlefish {
@@ -45,7 +49,7 @@ namespace {
 
 // Returns true only if command terminated normally, and returns 0
 Result<void> RunCommand(Command&& command) {
-  auto subprocess = std::move(command.Start());
+  auto subprocess = command.Start();
   siginfo_t infop{};
   // This blocks until the process exits, but doesn't reap it.
   auto result = subprocess.Wait(&infop, WEXITED);
@@ -152,22 +156,21 @@ Result<void> InstanceManager::SetInstanceGroup(
   const auto host_artifacts_path = group_info.host_artifacts_path;
   const auto product_out_path = group_info.product_out_path;
   const auto& per_instance_info = group_info.instances;
-
-  auto new_group = CF_EXPECT(
-      instance_db.AddInstanceGroup({.group_name = group_name,
-                                    .home_dir = home_dir,
-                                    .host_artifacts_path = host_artifacts_path,
-                                    .product_out_path = product_out_path}));
+  auto new_group = CF_EXPECT(instance_db.AddInstanceGroup(
+      {.group_name = group_name,
+       .home_dir = home_dir,
+       .host_artifacts_path = host_artifacts_path,
+       .product_out_path = product_out_path,
+       .start_time = selector::CvdServerClock::now()}));
 
   using InstanceInfo = selector::InstanceDatabase::InstanceInfo;
   std::vector<InstanceInfo> instances_info;
   for (const auto& instance : per_instance_info) {
-    InstanceInfo info{.name = instance.per_instance_name_,
-                      .id = instance.instance_id_};
+    InstanceInfo info{.id = instance.instance_id_,
+                      .name = instance.per_instance_name_};
     instances_info.push_back(info);
   }
-  auto result = instance_db.AddInstances(group_name, instances_info);
-  if (!result.ok()) {
+  android::base::ScopeGuard action_on_failure([&instance_db, &new_group]() {
     /*
      * The way InstanceManager uses the database is that it adds an empty
      * group, gets an handle, and add instances to it. Thus, failing to adding
@@ -179,17 +182,12 @@ Result<void> InstanceManager::SetInstanceGroup(
      *
      */
     instance_db.RemoveInstanceGroup(new_group.Get());
-    return CF_ERR(result.error().Trace());
-  }
-  return {};
-}
-
-Result<void> InstanceManager::SetBuildId(const uid_t uid,
-                                         const std::string& group_name,
-                                         const std::string& build_id) {
-  std::lock_guard assemblies_lock(instance_db_mutex_);
-  auto& instance_db = GetInstanceDB(uid);
-  CF_EXPECT(instance_db.SetBuildId(group_name, build_id));
+  });
+  CF_EXPECTF(instance_db.AddInstances(group_name, instances_info),
+             "Failed to add instances to the group \"{}\" so the group "
+             "is not added",
+             group_name);
+  action_on_failure.Disable();
   return {};
 }
 
@@ -201,124 +199,6 @@ void InstanceManager::RemoveInstanceGroup(const uid_t uid,
   if (!result.ok()) return;
   auto group = *result;
   instance_db.RemoveInstanceGroup(group);
-}
-
-template <typename... Args>
-static Command GetCommand(const std::string& prog_path, Args&&... args) {
-  Command command(prog_path);
-  (command.AddParameter(args), ...);
-  return command;
-}
-
-struct ExecCommandResult {
-  std::string stdout_buf;
-  std::string stderr_buf;
-};
-
-static Result<ExecCommandResult> ExecCommand(Command&& command) {
-  ExecCommandResult command_result;
-  CF_EXPECT_EQ(RunWithManagedStdio(std::move(command), /* stdin */ nullptr,
-                                   std::addressof(command_result.stdout_buf),
-                                   std::addressof(command_result.stderr_buf)),
-               0);
-  return command_result;
-}
-
-Result<InstanceManager::StatusCommandOutput>
-InstanceManager::IssueStatusCommand(const selector::LocalInstanceGroup& group,
-                                    const SharedFD& err) {
-  std::string not_supported_version_msg = " does not comply with cvd fleet.\n";
-  const auto host_android_out = group.HostArtifactsPath();
-  auto status_bin = CF_EXPECT(host_tool_target_manager_.ExecBaseName({
-      .artifacts_path = host_android_out,
-      .op = "status",
-  }));
-  const auto prog_path = host_android_out + "/bin/" + status_bin;
-  Command with_args = GetCommand(prog_path, "--all_instances", "--print");
-  with_args.SetEnvironment({ConcatToString("HOME=", group.HomeDir())});
-  auto command_result = ExecCommand(std::move(with_args));
-  if (command_result.ok()) {
-    StatusCommandOutput output;
-    if (command_result->stdout_buf.empty()) {
-      WriteAll(err, ConcatToString(group.GroupName(), "-*",
-                                   not_supported_version_msg));
-      Json::Reader().parse("{}", output.stdout_json);
-      return output;
-    }
-    output.stdout_json = CF_EXPECT(ParseJson(command_result->stdout_buf));
-    return output;
-  }
-  StatusCommandOutput output;
-  int index = 0;
-  for (const auto& instance_ref : CF_EXPECT(group.FindAllInstances())) {
-    const auto id = instance_ref.Get().InstanceId();
-    Command without_args = GetCommand(prog_path);
-    std::vector<std::string> new_envs{
-        ConcatToString("HOME=", group.HomeDir()),
-        ConcatToString(kCuttlefishInstanceEnvVarName, "=", std::to_string(id))};
-    without_args.SetEnvironment(new_envs);
-    auto second_command_result =
-        CF_EXPECT(ExecCommand(std::move(without_args)));
-    if (second_command_result.stdout_buf.empty()) {
-      WriteAll(err,
-               instance_ref.Get().DeviceName() + not_supported_version_msg);
-      second_command_result.stdout_buf.append("{}");
-    }
-    output.stdout_json[index] =
-        CF_EXPECT(ParseJson(second_command_result.stdout_buf));
-  }
-  return output;
-}
-
-Result<cvd::Status> InstanceManager::CvdFleetImpl(const uid_t uid,
-                                                  const SharedFD& out,
-                                                  const SharedFD& err) {
-  std::lock_guard assemblies_lock(instance_db_mutex_);
-  auto& instance_db = GetInstanceDB(uid);
-  const char _GroupDeviceInfoStart[] = "[\n";
-  const char _GroupDeviceInfoSeparate[] = ",\n";
-  const char _GroupDeviceInfoEnd[] = "]\n";
-  WriteAll(out, _GroupDeviceInfoStart);
-  auto&& instance_groups = instance_db.InstanceGroups();
-
-  for (const auto& group : instance_groups) {
-    CF_EXPECT(group != nullptr);
-    auto result = IssueStatusCommand(*group, err);
-    if (!result.ok()) {
-      WriteAll(err, "      (unknown instance status error)");
-    } else {
-      const auto [stderr_msg, stdout_json] = *result;
-      WriteAll(err, stderr_msg);
-      // TODO(kwstephenkim): build a data structure that also includes
-      // selector-related information, etc.
-      WriteAll(out, stdout_json.toStyledString());
-    }
-    // move on
-    if (group == *instance_groups.crbegin()) {
-      continue;
-    }
-    WriteAll(out, _GroupDeviceInfoSeparate);
-  }
-  WriteAll(out, _GroupDeviceInfoEnd);
-  cvd::Status status;
-  status.set_code(cvd::Status::OK);
-  return status;
-}
-
-Result<cvd::Status> InstanceManager::CvdFleet(
-    const uid_t uid, const SharedFD& out, const SharedFD& err,
-    const std::vector<std::string>& fleet_cmd_args) {
-  bool is_help = false;
-  for (const auto& arg : fleet_cmd_args) {
-    if (arg == "--help" || arg == "-help") {
-      is_help = true;
-      break;
-    }
-  }
-  CF_EXPECT(!is_help,
-            "cvd fleet --help should be handled by fleet handler itself.");
-  const auto status = CF_EXPECT(CvdFleetImpl(uid, out, err));
-  return status;
 }
 
 Result<std::string> InstanceManager::StopBin(
@@ -391,7 +271,7 @@ cvd::Status InstanceManager::CvdClear(const SharedFD& out,
       if (config_path.ok()) {
         auto stop_result = IssueStopCommand(out, err, *config_path, *group);
         if (!stop_result.ok()) {
-          LOG(ERROR) << stop_result.error().Message();
+          LOG(ERROR) << stop_result.error().FormatForEnv();
         }
       }
       RemoveFile(group->HomeDir() + "/cuttlefish_runtime");
@@ -468,6 +348,21 @@ Result<InstanceManager::LocalInstanceGroup> InstanceManager::FindGroup(
   auto output = CF_EXPECT(db.FindGroups(queries));
   CF_EXPECT_EQ(output.size(), 1);
   return *(output.begin());
+}
+
+std::vector<std::string> InstanceManager::AllGroupNames(const uid_t uid) const {
+  std::lock_guard lock(instance_db_mutex_);
+  if (!Contains(instance_dbs_, uid)) {
+    return {};
+  }
+  const auto& db = instance_dbs_.at(uid);
+  auto& local_instance_groups = db.InstanceGroups();
+  std::vector<std::string> group_names;
+  group_names.reserve(local_instance_groups.size());
+  for (const auto& group : local_instance_groups) {
+    group_names.push_back(group->GroupName());
+  }
+  return group_names;
 }
 
 }  // namespace cuttlefish

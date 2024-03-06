@@ -92,7 +92,9 @@ class DeviceConnection {
   #inputChannel;
   #adbChannel;
   #bluetoothChannel;
+  #lightsChannel;
   #locationChannel;
+  #sensorsChannel;
   #kmlLocationsChannel;
   #gpxLocationsChannel;
 
@@ -107,9 +109,11 @@ class DeviceConnection {
   #onAdbMessage;
   #onControlMessage;
   #onBluetoothMessage;
+  #onSensorsMessage
   #onLocationMessage;
   #onKmlLocationsMessage;
   #onGpxLocationsMessage;
+  #onLightsMessage;
 
   #micRequested = false;
   #cameraRequested = false;
@@ -127,6 +131,13 @@ class DeviceConnection {
       }
     };
     this.#inputChannel = createDataChannel(pc, 'input-channel');
+    this.#sensorsChannel = createDataChannel(pc, 'sensors-channel', (msg) => {
+      if (!this.#onSensorsMessage) {
+        console.error('Received unexpected Sensors message');
+        return;
+      }
+      this.#onSensorsMessage(msg);
+    });
     this.#adbChannel = createDataChannel(pc, 'adb-channel', (msg) => {
       if (!this.#onAdbMessage) {
         console.error('Received unexpected ADB message');
@@ -175,6 +186,14 @@ class DeviceConnection {
           }
           this.#onGpxLocationsMessage(msg.data);
         });
+    this.#lightsChannel = createDataChannel(pc, 'lights-channel', (msg) => {
+      if (!this.#onLightsMessage) {
+        console.error('Received unexpected Lights message');
+        return;
+      }
+      this.#onLightsMessage(msg);
+    });
+
     this.#streams = {};
     this.#streamPromiseResolvers = {};
 
@@ -248,6 +267,10 @@ class DeviceConnection {
     this.#streamChangeCallback = cb;
   }
 
+  expectStreamChange() {
+    this.#control.expectMessagesSoon(5000);
+  }
+
   #sendJsonInput(evt) {
     this.#inputChannel.send(JSON.stringify(evt));
   }
@@ -264,20 +287,28 @@ class DeviceConnection {
 
   // TODO (b/124121375): This should probably be an array of pointer events and
   // have different properties.
-  sendMultiTouch({idArr, xArr, yArr, down, slotArr, display_label}) {
-    this.#sendJsonInput({
-      type: 'multi-touch',
-      id: idArr,
-      x: xArr,
-      y: yArr,
-      down: down ? 1 : 0,
-      slot: slotArr,
-      display_label: display_label,
-    });
+  sendMultiTouch({idArr, xArr, yArr, down, device_label}) {
+    let events = {
+            type: 'multi-touch',
+            id: idArr,
+            x: xArr,
+            y: yArr,
+            down: down ? 1 : 0,
+            device_label: device_label,
+          };
+    this.#sendJsonInput(events);
   }
 
   sendKeyEvent(code, type) {
     this.#sendJsonInput({type: 'keyboard', keycode: code, event_type: type});
+  }
+
+  sendWheelEvent(pixels) {
+    this.#sendJsonInput({
+      type: 'wheel',
+      // convert double to int, forcing a base 10 conversion. pixels can be fractional.
+      pixels: parseInt(pixels, 10),
+    });
   }
 
   disconnect() {
@@ -417,6 +448,14 @@ class DeviceConnection {
     this.#locationChannel.send(msg);
   }
 
+  sendSensorsMessage(msg) {
+    this.#sensorsChannel.send(msg);
+  }
+
+  onSensorsMessage(cb) {
+    this.#onSensorsMessage = cb;
+  }
+
   onLocationMessage(cb) {
     this.#onLocationMessage = cb;
   }
@@ -441,6 +480,10 @@ class DeviceConnection {
   onConnectionStateChange(cb) {
     this.#pc.addEventListener(
         'connectionstatechange', evt => cb(this.#pc.connectionState));
+  }
+
+  onLightsMessage(cb) {
+    this.#onLightsMessage = cb;
   }
 }
 
@@ -521,6 +564,14 @@ class Controller {
   #onIceCandidate(iceCandidate) {
     console.debug(`Remote ICE Candidate: `, iceCandidate);
     this.#pc.addIceCandidate(iceCandidate);
+  }
+
+  expectMessagesSoon(durationMilliseconds) {
+    if (this.#serverConnector.expectMessagesSoon) {
+      this.#serverConnector.expectMessagesSoon(durationMilliseconds);
+    } else {
+      console.warn(`Unavailable expectMessagesSoon(). Messages may be slow.`);
+    }
   }
 
   // This effectively ensures work that changes connection state doesn't run

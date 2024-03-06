@@ -47,6 +47,9 @@ class LocalRecorder::Display
     , public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 public:
   Display(LocalRecorder::Impl& impl);
+  ~Display() {
+    CHECK(!encoder_running_) << "LocalRecorder::Display destroyed before calling Stop()";
+  }
 
   void EncoderLoop();
   void Stop();
@@ -78,7 +81,7 @@ public:
   mkvmuxer::Segment segment_;
   std::unique_ptr<webrtc::VideoEncoderFactory> encoder_factory_;
   std::mutex mkv_mutex_;
-  std::vector<std::unique_ptr<Display>> displays_;
+  std::map<std::string, std::unique_ptr<Display>> displays_;
 };
 
 /* static */
@@ -115,13 +118,23 @@ LocalRecorder::LocalRecorder(std::unique_ptr<LocalRecorder::Impl> impl)
 LocalRecorder::~LocalRecorder() = default;
 
 void LocalRecorder::AddDisplay(
-    size_t width,
-    size_t height,
+    const std::string& label, size_t width, size_t height,
     std::shared_ptr<webrtc::VideoTrackSourceInterface> source) {
-  std::unique_ptr<Display> display(new Display(*impl_));
-  display->source_ = source;
+  LOG(ERROR) << "Display added with label '" << label << "'";
 
   std::lock_guard lock(impl_->mkv_mutex_);
+
+  auto existing_display = impl_->displays_.find(label);
+  if (existing_display != impl_->displays_.end()) {
+    auto display = existing_display->second.get();
+    CHECK(display);
+    display->source_ = source;
+    source->AddOrUpdateSink(display, rtc::VideoSinkWants{});
+    return;
+  }
+
+  std::unique_ptr<Display> display(new Display(*impl_));
+  display->source_ = source;
   display->video_track_number_ =
       impl_->segment_.AddVideoTrack(width, height, 0);
   if (display->video_track_number_ == 0) {
@@ -172,15 +185,13 @@ void LocalRecorder::AddDisplay(
     display->EncoderLoop();
   }, display.get());
 
-  impl_->displays_.emplace_back(std::move(display));
+  impl_->displays_[label] = std::move(display);
 }
 
 void LocalRecorder::Stop() {
-  for (auto& display : impl_->displays_) {
+  for (auto& [label, display] : impl_->displays_) {
     display->Stop();
   }
-  impl_->displays_.clear();
-
   std::lock_guard lock(impl_->mkv_mutex_);
   impl_->segment_.Finalize();
 }
@@ -258,7 +269,7 @@ webrtc::EncodedImageCallback::Result LocalRecorder::Display::OnEncodedImage(
     const webrtc::CodecSpecificInfo* codec_specific_info) {
   uint64_t timestamp = encoded_image.Timestamp() / kRtpTicksPerNs;
 
-  std::lock_guard(impl_.mkv_mutex_);
+  std::lock_guard lock(impl_.mkv_mutex_);
 
   bool is_key =
       encoded_image._frameType == webrtc::VideoFrameType::kVideoFrameKey;

@@ -15,6 +15,7 @@
  */
 #include "host/libs/config/custom_actions.h"
 
+#include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/parseint.h>
 #include <android-base/strings.h>
@@ -27,6 +28,7 @@
 
 #include "common/libs/utils/files.h"
 #include "common/libs/utils/flag_parser.h"
+#include "common/libs/utils/json.h"
 #include "host/libs/config/cuttlefish_config.h"
 
 namespace cuttlefish {
@@ -172,7 +174,7 @@ std::string DefaultCustomActionConfig() {
     auto directory_contents_result =
         DirectoryContents(custom_action_config_dir);
     CHECK(directory_contents_result.ok())
-        << directory_contents_result.error().Trace();
+        << directory_contents_result.error().FormatForEnv();
     auto custom_action_configs = std::move(*directory_contents_result);
     // Two entries are always . and ..
     if (custom_action_configs.size() > 3) {
@@ -211,19 +213,19 @@ class CustomActionConfigImpl : public CustomActionConfigProvider {
         "empty then the custom action config will be empty as well.");
     custom_action_config_flag_.Getter(
         [this]() { return custom_action_config_[0]; });
-    custom_action_config_flag_.Setter([this](const FlagMatch& match) {
-      if (!match.value.empty() &&
-          (match.value == "unset" || match.value == "\"unset\"")) {
-        custom_action_config_.push_back(DefaultCustomActionConfig());
-      } else if (!match.value.empty() && !FileExists(match.value)) {
-        LOG(ERROR) << "custom_action_config file \"" << match.value << "\" "
-                   << "does not exist.";
-        return false;
-      } else {
-        custom_action_config_.push_back(match.value);
-      }
-      return true;
-    });
+    custom_action_config_flag_.Setter(
+        [this](const FlagMatch& match) -> Result<void> {
+          if (!match.value.empty() &&
+              (match.value == "unset" || match.value == "\"unset\"")) {
+            custom_action_config_.push_back(DefaultCustomActionConfig());
+          } else if (!match.value.empty() && !FileExists(match.value)) {
+            return CF_ERRF("custom_action_config file \"{}\" does not exist.",
+                           match.value);
+          } else {
+            custom_action_config_.push_back(match.value);
+          }
+          return {};
+        });
     // TODO(schuffelen): Access ConfigFlag directly for these values.
     custom_actions_flag_ = GflagsCompatFlag("custom_actions");
     custom_actions_flag_.Help(
@@ -232,23 +234,16 @@ class CustomActionConfigImpl : public CustomActionConfigProvider {
         "preset config files; prefer --custom_action_config to specify a "
         "custom config file on the command line. Actions in this flag are "
         "combined with actions in --custom_action_config.");
-    custom_actions_flag_.Setter([this](const FlagMatch& match) {
+    custom_actions_flag_.Setter([this](const FlagMatch& match) -> Result<void> {
       // Load the custom action from the --config preset file.
       if (match.value == "unset" || match.value == "\"unset\"") {
         AddEmptyJsonCustomActionConfigs();
-        return true;
+        return {};
       }
-      Json::CharReaderBuilder builder;
-      std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-      std::string errorMessage;
-      Json::Value custom_action_array(Json::arrayValue);
-      if (!reader->parse(&*match.value.begin(), &*match.value.end(),
-                         &custom_action_array, &errorMessage)) {
-        LOG(ERROR) << "Could not read custom actions config flag: "
-                   << errorMessage;
-        return false;
-      }
-      return AddJsonCustomActionConfigs(custom_action_array);
+      auto custom_action_array = CF_EXPECT(
+          ParseJson(match.value), "Could not read custom actions config flag");
+      CF_EXPECT(AddJsonCustomActionConfigs(custom_action_array));
+      return {};
     });
   }
 
@@ -332,34 +327,24 @@ class CustomActionConfigImpl : public CustomActionConfigProvider {
     return {static_cast<FlagFeature*>(&config_)};
   }
 
-  bool Process(std::vector<std::string>& args) override {
-    if (!ParseFlags(Flags(), args)) {
-      return false;
-    }
+  Result<void> Process(std::vector<std::string>& args) override {
+    CF_EXPECT(ParseFlags(Flags(), args));
     if (custom_action_config_.empty()) {
       // no custom action flag input
       custom_action_config_.push_back(DefaultCustomActionConfig());
     }
     for (const auto& config : custom_action_config_) {
       if (config != "") {
-        Json::CharReaderBuilder builder;
-        std::ifstream ifs(config);
-        std::string errorMessage;
-        Json::Value custom_action_array(Json::arrayValue);
-        if (!Json::parseFromStream(builder, ifs, &custom_action_array,
-                                   &errorMessage)) {
-          LOG(ERROR) << "Could not read custom actions config file " << config
-                     << ": " << errorMessage;
-          return false;
-        }
-        if (!AddJsonCustomActionConfigs(custom_action_array)) {
-          return false;
-        }
+        std::string config_contents;
+        CF_EXPECT(android::base::ReadFileToString(config, &config_contents));
+        auto custom_action_array = CF_EXPECT(ParseJson(config_contents));
+        CF_EXPECTF(AddJsonCustomActionConfigs(custom_action_array),
+                   "Failed to parse config at \"{}\"", config);
       } else {
         AddEmptyJsonCustomActionConfigs();
       }
     }
-    return true;
+    return {};
   }
   bool WriteGflagsCompatHelpXml(std::ostream& out) const override {
     return WriteGflagsCompatXml(Flags(), out);

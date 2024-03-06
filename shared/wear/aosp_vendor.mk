@@ -29,7 +29,7 @@ PRODUCT_ART_TARGET_INCLUDE_DEBUG_BUILD := false
 PRODUCT_PACKAGES += \
     CellBroadcastAppPlatform \
     CellBroadcastServiceModulePlatform \
-    com.android.tethering.inprocess \
+    com.android.tethering \
     InProcessNetworkStack \
 
 PRODUCT_MINIMIZE_JAVA_DEBUG_INFO := true
@@ -39,5 +39,3 @@ ifneq (,$(filter eng, $(TARGET_BUILD_VARIANT)))
 endif
 
 TARGET_SYSTEM_PROP += device/google/cuttlefish/shared/wear/wearable-1024.prop
-
-TARGET_VNDK_USE_CORE_VARIANT := true

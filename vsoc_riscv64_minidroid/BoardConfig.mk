@@ -24,6 +24,10 @@ TARGET_ARCH_VARIANT :=
 TARGET_CPU_VARIANT := generic
 TARGET_CPU_ABI := riscv64
 
+#HOST_CROSS_OS := linux_musl
+#HOST_CROSS_ARCH := arm64
+#HOST_CROSS_2ND_ARCH :=
+
 # Temporary hack while prebuilt modules are missing riscv64.
 ALLOW_MISSING_DEPENDENCIES := true
 
@@ -31,6 +35,6 @@ TARGET_KERNEL_ARCH ?= $(TARGET_ARCH)
 TARGET_KERNEL_USE ?= mainline
 KERNEL_MODULES_PATH := device/google/cuttlefish_prebuilts/kernel/$(TARGET_KERNEL_USE)-$(TARGET_KERNEL_ARCH)
 TARGET_KERNEL_PATH := $(KERNEL_MODULES_PATH)/kernel-$(TARGET_KERNEL_USE)
-# FIXME: system_dlkm should be specified as well
+SYSTEM_DLKM_SRC ?= $(KERNEL_MODULES_PATH)/system_dlkm
 
 -include device/google/cuttlefish/shared/minidroid/BoardConfig.mk
